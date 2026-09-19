@@ -3,3 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+venv/
+ml_pipeline/__pycache__/
+ml_pipeline/features.csv
+dataset/processed/
