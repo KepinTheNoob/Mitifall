@@ -6,5 +6,9 @@
 venv/
 ml_pipeline/__pycache__/
 ml_pipeline/features.csv
+ml_pipeline/outputs/features.csv
+
+# Cloud credentials: WiFi password, Adafruit IO key, Blynk auth token.
+include/secrets.h
 dataset/processed/
 dataset/raw/

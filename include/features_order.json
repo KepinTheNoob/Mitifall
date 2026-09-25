@@ -1,0 +1,227 @@
+{
+  "generated": "2026-09-25T10:13:31+00:00",
+  "axis_set": "all9",
+  "sample_rate_note": "Training windows come from the UMAFall wrist stream at ~20 Hz; features are window statistics, so the firmware window length in seconds is what must match, not the sample count.",
+  "window_seconds": 2.0,
+  "overlap": 0.5,
+  "units": {
+    "accelerometer": "g (training data saturates at +/-8 g)",
+    "gyroscope": "deg/s (training data saturates at +/-256 deg/s)",
+    "magnetometer": "uncalibrated MPU-9250 magnetometer counts scaled by the UMAFall capture; |M| median ~155 (NOT calibrated uT)"
+  },
+  "feature_count": 53,
+  "features": [
+    {
+      "index": 0,
+      "name": "Ax_mean"
+    },
+    {
+      "index": 1,
+      "name": "Ax_std"
+    },
+    {
+      "index": 2,
+      "name": "Ax_min"
+    },
+    {
+      "index": 3,
+      "name": "Ax_max"
+    },
+    {
+      "index": 4,
+      "name": "Ax_var"
+    },
+    {
+      "index": 5,
+      "name": "Ay_mean"
+    },
+    {
+      "index": 6,
+      "name": "Ay_std"
+    },
+    {
+      "index": 7,
+      "name": "Ay_min"
+    },
+    {
+      "index": 8,
+      "name": "Ay_max"
+    },
+    {
+      "index": 9,
+      "name": "Ay_var"
+    },
+    {
+      "index": 10,
+      "name": "Az_mean"
+    },
+    {
+      "index": 11,
+      "name": "Az_std"
+    },
+    {
+      "index": 12,
+      "name": "Az_min"
+    },
+    {
+      "index": 13,
+      "name": "Az_max"
+    },
+    {
+      "index": 14,
+      "name": "Az_var"
+    },
+    {
+      "index": 15,
+      "name": "Gx_mean"
+    },
+    {
+      "index": 16,
+      "name": "Gx_std"
+    },
+    {
+      "index": 17,
+      "name": "Gx_min"
+    },
+    {
+      "index": 18,
+      "name": "Gx_max"
+    },
+    {
+      "index": 19,
+      "name": "Gx_var"
+    },
+    {
+      "index": 20,
+      "name": "Gy_mean"
+    },
+    {
+      "index": 21,
+      "name": "Gy_std"
+    },
+    {
+      "index": 22,
+      "name": "Gy_min"
+    },
+    {
+      "index": 23,
+      "name": "Gy_max"
+    },
+    {
+      "index": 24,
+      "name": "Gy_var"
+    },
+    {
+      "index": 25,
+      "name": "Gz_mean"
+    },
+    {
+      "index": 26,
+      "name": "Gz_std"
+    },
+    {
+      "index": 27,
+      "name": "Gz_min"
+    },
+    {
+      "index": 28,
+      "name": "Gz_max"
+    },
+    {
+      "index": 29,
+      "name": "Gz_var"
+    },
+    {
+      "index": 30,
+      "name": "Mx_mean"
+    },
+    {
+      "index": 31,
+      "name": "Mx_std"
+    },
+    {
+      "index": 32,
+      "name": "Mx_min"
+    },
+    {
+      "index": 33,
+      "name": "Mx_max"
+    },
+    {
+      "index": 34,
+      "name": "Mx_var"
+    },
+    {
+      "index": 35,
+      "name": "My_mean"
+    },
+    {
+      "index": 36,
+      "name": "My_std"
+    },
+    {
+      "index": 37,
+      "name": "My_min"
+    },
+    {
+      "index": 38,
+      "name": "My_max"
+    },
+    {
+      "index": 39,
+      "name": "My_var"
+    },
+    {
+      "index": 40,
+      "name": "Mz_mean"
+    },
+    {
+      "index": 41,
+      "name": "Mz_std"
+    },
+    {
+      "index": 42,
+      "name": "Mz_min"
+    },
+    {
+      "index": 43,
+      "name": "Mz_max"
+    },
+    {
+      "index": 44,
+      "name": "Mz_var"
+    },
+    {
+      "index": 45,
+      "name": "acc_mag_max"
+    },
+    {
+      "index": 46,
+      "name": "acc_mag_mean"
+    },
+    {
+      "index": 47,
+      "name": "acc_mag_std"
+    },
+    {
+      "index": 48,
+      "name": "gyr_mag_max"
+    },
+    {
+      "index": 49,
+      "name": "gyr_mag_mean"
+    },
+    {
+      "index": 50,
+      "name": "gyr_mag_std"
+    },
+    {
+      "index": 51,
+      "name": "acc_sma"
+    },
+    {
+      "index": 52,
+      "name": "gyr_sma"
+    }
+  ]
+}
