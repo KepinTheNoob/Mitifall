@@ -7,3 +7,4 @@ venv/
 ml_pipeline/__pycache__/
 ml_pipeline/features.csv
 dataset/processed/
+dataset/raw/
