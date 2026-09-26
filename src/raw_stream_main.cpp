@@ -203,6 +203,10 @@ void publishWindow() {
 }  // namespace
 
 void setup() {
+    // Drive the actuators off before anything else: an undriven GPIO floats, and
+    // a floating input on an active-low module reads as "on".
+    AlarmManager::forceOff();
+
     Serial.begin(115200);
     const std::uint32_t waitStart = millis();
     while (!Serial && millis() - waitStart < 3000) {
@@ -258,6 +262,17 @@ void setup() {
 
 void loop() {
     AlarmManager::update();
+
+    if (AlarmManager::consumeDismissPress()) {
+        // update() already silenced the actuators. Push the switch back to off so
+        // the dashboard stops showing an active buzzer command.
+        if (kPrintBanner) {
+            Serial.println("# button GPIO3: actuators silenced");
+        }
+        if (gMqtt.connected()) {
+            gMqtt.publish(AIO_FEED_BUZZER_COMMAND, "0");
+        }
+    }
 
     const std::uint32_t now = millis();
     const bool sampleDue = static_cast<std::int32_t>(now - gNextSampleMs) >= 0;

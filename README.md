@@ -30,6 +30,7 @@ network, and streams telemetry to Adafruit IO or Blynk IoT.
 6. [Firmware Environments: Build & Upload](#6-firmware-environments-build--upload)
 7. [Cloud Dashboard Setup](#7-cloud-dashboard-setup)
 8. [Troubleshooting & Common Pitfalls](#8-troubleshooting--common-pitfalls)
+   — [actuators stuck on](#87-buzzer-or-motor-runs-continuously-from-power-up) · [silencing an alarm](#88-silencing-an-alarm)
 9. [Measured Performance](#9-measured-performance)
 10. [Resource Footprint](#10-resource-footprint)
 11. [Configuration Reference](#11-configuration-reference)
@@ -70,8 +71,9 @@ strictly optional: **detection and the physical alarm never depend on WiFi**.
 │                            ┌──────────────────────────┐                      ┌──────────────────┐  │
 │                            │   ALARM MANAGER          │                      │  TELEMETRY       │  │
 │                            │   non-blocking, millis() │                      │  (best effort)   │  │
-│                            │   ├─ Buzzer   GPIO3      │                      │                  │  │
-│                            │   └─ Vibration GPIO4     │                      │                  │  │
+│                            │   ├─ Buzzer    GPIO4     │                      │                  │  │
+│                            │   ├─ Vibration GPIO0     │                      │                  │  │
+│                            │   └─ Dismiss ◄ GPIO3 btn │                      │                  │  │
 │                            └──────────────────────────┘                      └────────┬─────────┘  │
 └───────────────────────────────────────────────────────────────────────────────────────┼────────────┘
                                                                                         │
@@ -108,15 +110,17 @@ timeouts, so a dead broker cannot stall acquisition.
 | 6 | TP4056 (USB-C) | 1S Li-Po charger | Prefer the DW01+FS8205 protected variant |
 | 7 | 1S Li-Po (3.7 V) | Battery | 500–1000 mAh suits a wrist enclosure |
 | 8 | SPDT mini slide switch | Power on/off | Wired on the **load** side, not the cell |
+| 9 | Momentary push button | Silence an active alarm | GPIO3 → GND, uses the internal pull-up |
 
 ### 2.2 Signal pinout
 
 | Signal | ESP32-C3 pin | Connects to | Direction | Notes |
 |--------|:------------:|-------------|:---------:|-------|
-| `SDA` | **GPIO8** | MPU-6050 SDA + magnetometer SDA | bidir | Board variant default; 4.7 kΩ pull-up to 3V3 |
-| `SCL` | **GPIO10** | MPU-6050 SCL + magnetometer SCL | bidir | Board variant default; 4.7 kΩ pull-up to 3V3 |
-| `BUZZER` | **GPIO3** | Active buzzer `+` | out | Direct drive if ≤ 12 mA, else transistor |
-| `VIBRATION` | **GPIO4** | Motor driver gate/base | out | **Never** drive the motor directly |
+| `SDA` | **GPIO8** | MPU-6050 SDA + magnetometer SDA | bidir | 4.7 kΩ pull-up to 3V3 |
+| `SCL` | **GPIO9** | MPU-6050 SCL + magnetometer SCL | bidir | 4.7 kΩ pull-up to 3V3. GPIO9 is the BOOT strapping pin — fine for I²C once running, but if it is held LOW at reset the chip enters download mode |
+| `BUZZER` | **GPIO4** | Active buzzer module `IN` | out | Idle level set by `kBuzzerActiveHigh` |
+| `VIBRATION` | **GPIO0** | Motor driver gate/base | out | **Never** drive the motor directly |
+| `DISMISS_BTN` | **GPIO3** | Momentary push button → `GND` | in | `INPUT_PULLUP`; pressed reads LOW |
 | `3V3` | `3V3` | MPU-6050 VCC, magnetometer VCC | pwr | Both modules are 3.3 V tolerant |
 | `GND` | `GND` | Common ground for all modules | pwr | Single star ground |
 
@@ -765,7 +769,55 @@ board_build.partitions = huge_app.csv     ; ~3 MB app, no OTA
 
 Alternatively shrink the model: `--n-estimators 30 --max-depth 8`.
 
-### 8.7 Sensor reads fail intermittently
+### 8.7 Buzzer or motor runs continuously from power-up
+
+Three different causes, in the order worth checking:
+
+**1. Inverted polarity.** Cheap 3-pin breakouts are frequently active-LOW, so
+driving the pin LOW for "off" turns them on permanently. Polarity is configured
+per device, because a buzzer board and a motor driver are often opposite:
+
+```cpp
+constexpr bool kBuzzerActiveHigh = false;
+constexpr bool kVibrationActiveHigh = false;
+```
+
+Flash `[env:scanner]`. It drives each actuator alone for ~0.9 s and prints the
+configured polarity. If a device is silent during *its own* step but runs the rest
+of the time, that device's flag is inverted.
+
+**2. Floating pin during boot.** Before firmware runs, a GPIO is an undriven
+input. An active-low module sees that as "on", so it sounds from power-up until
+`setup()` executes — which includes the 3 s USB CDC wait. All three entry points
+now call `AlarmManager::forceOff()` as their **first statement**, and it presets
+the output latch *before* `pinMode(OUTPUT)` so there is no LOW glitch on the
+transition. For a completely silent boot, add a 10 kΩ pull-up (active-low
+modules) or pull-down (active-high) on each actuator input line — firmware cannot
+control a pin before the CPU starts.
+
+**3. Wiring.** If a device stays on with *either* polarity setting, firmware is
+not the problem. Check that the module's `IN` pin is really on the GPIO rather
+than tied to VCC, and that the motor is fed through its driver transistor instead
+of directly off the 3V3 rail. `AlarmManager::update()` actively re-asserts the off
+level every loop iteration whenever no alert is running, so a persistent "on" with
+correct wiring is not possible from the firmware side.
+
+### 8.8 Silencing an alarm
+
+Two independent paths, both non-blocking:
+
+| Path | Mechanism |
+|------|-----------|
+| **Physical button** | GPIO3 → GND, 40 ms debounce, handled in `AlarmManager::update()` |
+| **Dashboard** | Blynk `V2` push button (`ml_inference`), or the Adafruit IO toggle (`raw_stream`) |
+
+A button press stops both actuators immediately, clears the latched detection
+state, restarts the re-trigger cooldown, and pushes `V1 = 0` to Blynk. In
+`raw_stream` it also publishes `0` back to `buzzer-command` so the dashboard
+switch stops showing an active command. Verify the wiring with `[env:scanner]`,
+which prints `Button GPIO3: PRESSED` / `released` live.
+
+### 8.9 Sensor reads fail intermittently
 
 Long jumper wires plus 400 kHz I²C is a common culprit. Lower
 `kI2cFrequencyHz` to `100000` in `board_config.h`, shorten the leads, and confirm
@@ -847,10 +899,14 @@ Feature-extraction and inference latency are printed per window by
 
 | Constant | Default | Meaning |
 |----------|:-------:|---------|
-| `kI2cSdaPin` / `kI2cSclPin` | `8` / `10` | I²C pins (board variant defaults) |
+| `kI2cSdaPin` / `kI2cSclPin` | `8` / `9` | I²C pins |
 | `kI2cFrequencyHz` | `400000` | Lower to `100000` for long wires |
-| `kBuzzerPin` / `kVibrationPin` | `3` / `4` | Actuator GPIOs |
-| `kActuatorsActiveHigh` | `true` | Set `false` for active-low modules |
+| `kBuzzerPin` / `kVibrationPin` | `4` / `0` | Actuator GPIOs |
+| `kBuzzerActiveHigh` | `false` | `true` if pin HIGH sounds the buzzer |
+| `kVibrationActiveHigh` | `false` | `true` if pin HIGH runs the motor |
+| `kDismissButtonPin` | `3` | Momentary button to silence the alarm |
+| `kButtonActiveLow` | `true` | `INPUT_PULLUP`, pressed = LOW |
+| `kButtonDebounceMs` | `40` | Debounce window |
 | `kSampleRateHz` | `50` | Acquisition rate |
 | `kWindowSamples` / `kHopSamples` | `100` / `50` | 2.0 s window, 50 % overlap |
 | `kAccelLimitG` | `8.0` | Matches the training capture's saturation |

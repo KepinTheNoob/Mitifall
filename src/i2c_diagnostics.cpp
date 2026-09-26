@@ -174,6 +174,9 @@ bool isPinUsable(int pin) {
     if (pin == BoardConfig::kBuzzerPin || pin == BoardConfig::kVibrationPin) {
         return false;  // driving an actuator line as I2C would beep/buzz
     }
+    if (pin == BoardConfig::kDismissButtonPin) {
+        return false;  // the button holds this line, it is not a bus candidate
+    }
     return true;
 }
 

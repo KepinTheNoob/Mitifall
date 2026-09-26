@@ -36,11 +36,34 @@ constexpr std::uint8_t kQmc5883pAddr = 0x2C;  // QST QMC5883P, the current part
 // ---------------------------------------------------------------------------
 // Actuators
 // ---------------------------------------------------------------------------
-constexpr int kBuzzerPin = 3;     // active buzzer: drive HIGH to sound
-constexpr int kVibrationPin = 4;  // vibration motor driver input
+constexpr int kBuzzerPin = 4;     // active buzzer module input
+constexpr int kVibrationPin = 1;  // vibration motor driver input
 
-// Set to false if your buzzer/motor module is active-low.
-constexpr bool kActuatorsActiveHigh = true;
+// Polarity is per device, because a buzzer breakout and a motor driver board are
+// often wired the opposite way round from each other.
+//
+//   true  = pin HIGH turns the device ON  (direct transistor base / gate)
+//   false = pin LOW  turns the device ON  (common on 3-pin "module" breakouts)
+//
+// How to determine it: flash [env:scanner]. It drives each actuator in turn for
+// ~0.9 s. If a device is silent during its own step but runs the rest of the
+// time, that device's flag is inverted - flip it and re-flash.
+//
+// If a device is on CONTINUOUSLY regardless of either setting, the problem is
+// wiring, not firmware: check that the module's IN pin is actually on the GPIO
+// (not tied to VCC/GND) and that the motor is fed through the driver transistor
+// rather than straight off the 3V3 rail.
+constexpr bool kBuzzerActiveHigh = false;
+constexpr bool kVibrationActiveHigh = false;
+
+// ---------------------------------------------------------------------------
+// Dismiss button
+// ---------------------------------------------------------------------------
+// Momentary push button: one leg to GPIO3, the other to GND. The internal
+// pull-up holds the line HIGH when released, so a press reads LOW.
+constexpr int kDismissButtonPin = 3;
+constexpr bool kButtonActiveLow = true;
+constexpr std::uint32_t kButtonDebounceMs = 40;
 
 // ---------------------------------------------------------------------------
 // Acquisition timing

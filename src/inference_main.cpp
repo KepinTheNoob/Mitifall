@@ -278,6 +278,11 @@ BLYNK_CONNECTED() {
 }
 
 void setup() {
+    // Before anything else: an undriven GPIO floats, and a floating input on an
+    // active-low module reads as "on", so the buzzer would sound through boot and
+    // the 3 s USB CDC wait below.
+    AlarmManager::forceOff();
+
     Serial.begin(115200);
     const std::uint32_t waitStart = millis();
     while (!Serial && millis() - waitStart < 3000) {
@@ -285,6 +290,8 @@ void setup() {
     delay(200);
 
     AlarmManager::begin();
+    Serial.printf("Actuators off; dismiss button on GPIO%d%s\n", kDismissButtonPin,
+                  AlarmManager::buttonHeld() ? " (currently HELD - check wiring)" : "");
     reportModel();
     runSelfTest();
 
@@ -324,9 +331,19 @@ void setup() {
 }
 
 void loop() {
-    // Actuator timing first: it must keep running even if a read or the network
-    // stalls. The alarm is the safety-critical output.
+    // Actuator timing and the dismiss button first: both must keep working even
+    // if a sensor read or the network stalls. The alarm is the safety-critical
+    // output, and silencing it must never be blocked.
     AlarmManager::update();
+
+    if (AlarmManager::consumeDismissPress()) {
+        // update() has already stopped the buzzer and motor; clear the latched
+        // detection state so the next window starts clean.
+        gConsecutivePositives = 0;
+        gLastAlertMs = millis();  // start the cooldown from the dismissal
+        updateAlarmStatus(0);
+        Serial.println("Button GPIO3: alarm dismissed");
+    }
 
     if (gAlarmStatus == 1 && !AlarmManager::isAlerting()) {
         updateAlarmStatus(0);  // pattern finished on its own

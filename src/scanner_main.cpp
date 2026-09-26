@@ -24,9 +24,11 @@ void banner() {
     Serial.println();
     Serial.println("=====================================================");
     Serial.println(" Mitifall - I2C and actuator diagnostics");
-    Serial.printf(" SDA=%d SCL=%d @ %lu Hz | buzzer GPIO%d | motor GPIO%d\n", kI2cSdaPin,
-                  kI2cSclPin, static_cast<unsigned long>(kI2cFrequencyHz), kBuzzerPin,
-                  kVibrationPin);
+    Serial.printf(" SDA=%d SCL=%d @ %lu Hz\n", kI2cSdaPin, kI2cSclPin,
+                  static_cast<unsigned long>(kI2cFrequencyHz));
+    Serial.printf(" buzzer GPIO%d (active %s) | motor GPIO%d (active %s) | button GPIO%d\n",
+                  kBuzzerPin, kBuzzerActiveHigh ? "HIGH" : "LOW", kVibrationPin,
+                  kVibrationActiveHigh ? "HIGH" : "LOW", kDismissButtonPin);
     Serial.println("=====================================================");
 }
 
@@ -57,6 +59,8 @@ void reportExpectations(const I2cDiagnostics::ScanResult &scan) {
 void runActuatorTest() {
     Serial.println();
     Serial.println("Actuator test: buzzer only, then motor only, then both");
+    Serial.flush();
+    delay(200);
 
     struct Step {
         const char *label;
@@ -77,18 +81,31 @@ void runActuatorTest() {
         pattern.useBuzzer = step.buzzer;
         pattern.useVibration = step.vibration;
 
-        Serial.printf("  -> %s\n", step.label);
+        Serial.printf("  -> Memulai uji: %s\n", step.label);
+        Serial.flush();
+
         AlarmManager::trigger(pattern);
+
+        // Tambahkan delay minimal 10ms di dalam polling loop
         while (AlarmManager::isAlerting()) {
             AlarmManager::update();
+            delay(10);
         }
+
+        delay(300); // Jeda antar pengujian aktuator
     }
+
     Serial.println("Actuator test complete");
+    Serial.flush();
 }
 
 }  // namespace
 
 void setup() {
+    // Silence the actuators before anything else, so a floating pin cannot leave
+    // the buzzer sounding through boot and the USB CDC wait below.
+    AlarmManager::forceOff();
+
     Serial.begin(115200);
     // Native USB CDC needs a moment before the host opens the port.
     const std::uint32_t waitStart = millis();
@@ -128,11 +145,22 @@ void setup() {
     Serial.println();
     Serial.println("Idle. Re-scanning every 5 s; reset to run the full sweep again.");
 }
-
+const int kMotorPin = BoardConfig::kVibrationPin;
 void loop() {
     static std::uint32_t lastScanMs = 0;
+    static bool lastButton = false;
 
     AlarmManager::update();
+
+    // Live button feedback so the GPIO3 wiring can be verified by pressing it.
+    if (AlarmManager::buttonHeld() != lastButton) {
+        lastButton = AlarmManager::buttonHeld();
+        Serial.printf("Button GPIO%d: %s\n", kDismissButtonPin,
+                      lastButton ? "PRESSED" : "released");
+    }
+    if (AlarmManager::consumeDismissPress()) {
+        Serial.println("  -> dismiss press registered (would silence an active alarm)");
+    }
 
     if (millis() - lastScanMs >= 5000) {
         lastScanMs = millis();
@@ -142,4 +170,12 @@ void loop() {
                       static_cast<unsigned>(scan.count));
         I2cDiagnostics::printScanResult(Serial, scan);
     }
+
+    Serial.println("Motor ON (GETAR)...");
+    digitalWrite(kMotorPin, HIGH);
+    delay(1000); // Getar selama 1 detik
+
+    Serial.println("Motor OFF...");
+    digitalWrite(kMotorPin, LOW);
+    delay(2000); // Berhenti 2 detik
 }
