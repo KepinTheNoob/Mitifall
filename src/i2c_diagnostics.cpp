@@ -16,8 +16,12 @@ constexpr std::uint8_t kHmcIdB = 0x34;  // '4'
 constexpr std::uint8_t kHmcIdC = 0x33;  // '3'
 
 // QMC5883L exposes a chip-ID register that reads 0xFF.
-constexpr std::uint8_t kRegQmcChipId = 0x0D;
-constexpr std::uint8_t kQmcChipId = 0xFF;
+constexpr std::uint8_t kRegQmcLChipId = 0x0D;
+constexpr std::uint8_t kQmcLChipId = 0xFF;
+
+// QMC5883P: chip ID at register 0x00 reads 0x80.
+constexpr std::uint8_t kRegQmcPChipId = 0x00;
+constexpr std::uint8_t kQmcPChipId = 0x80;
 
 bool isMpuVariant(std::uint8_t whoAmI) {
     // MPU6500 = 0x70, MPU9250 = 0x71, MPU9255 = 0x73, MPU6555 = 0x7C.
@@ -35,7 +39,9 @@ const char *deviceKindName(DeviceKind kind) {
         case DeviceKind::Hmc5883L:
             return "HMC5883L (genuine)";
         case DeviceKind::Qmc5883L:
-            return "QMC5883L (clone)";
+            return "QMC5883L (QST clone)";
+        case DeviceKind::Qmc5883P:
+            return "QMC5883P (QST)";
         default:
             return "unknown device";
     }
@@ -98,14 +104,20 @@ DeviceKind identify(TwoWire &bus, std::uint8_t address, std::uint8_t &idByte) {
         return DeviceKind::Unknown;
     }
 
-    if (address == BoardConfig::kQmc5883Addr) {
-        if (readRegister(bus, address, kRegQmcChipId, idByte) && idByte == kQmcChipId) {
-            return DeviceKind::Qmc5883L;
-        }
-        // Some clones report a different ID but are otherwise compatible; the
-        // address alone is a strong hint, so report it as a QMC and let the
-        // driver's own probe decide.
+    if (address == BoardConfig::kQmc5883lAddr) {
+        readRegister(bus, address, kRegQmcLChipId, idByte);
+        // Some clones report an ID other than 0xFF but are otherwise compatible,
+        // so the address alone is treated as sufficient evidence here and the
+        // driver's own probe makes the final call.
+        (void)kQmcLChipId;
         return DeviceKind::Qmc5883L;
+    }
+
+    if (address == BoardConfig::kQmc5883pAddr) {
+        if (readRegister(bus, address, kRegQmcPChipId, idByte) && idByte == kQmcPChipId) {
+            return DeviceKind::Qmc5883P;
+        }
+        return DeviceKind::Unknown;
     }
 
     return DeviceKind::Unknown;

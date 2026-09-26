@@ -33,18 +33,23 @@ void banner() {
 void reportExpectations(const I2cDiagnostics::ScanResult &scan) {
     const bool imu = scan.contains(kMpu6050AddrPrimary) || scan.contains(kMpu6050AddrSecondary);
     const bool hmc = scan.contains(kHmc5883Addr);
-    const bool qmc = scan.contains(kQmc5883Addr);
+    const bool qmcL = scan.contains(kQmc5883lAddr);
+    const bool qmcP = scan.contains(kQmc5883pAddr);
+    const int magCount = (hmc ? 1 : 0) + (qmcL ? 1 : 0) + (qmcP ? 1 : 0);
 
     Serial.println("Expected devices:");
     Serial.printf("  MPU-6050 (0x68/0x69) : %s\n", imu ? "FOUND" : "missing");
     Serial.printf("  HMC5883L (0x1E)      : %s\n", hmc ? "FOUND" : "missing");
-    Serial.printf("  QMC5883L (0x0D)      : %s\n", qmc ? "FOUND" : "missing");
+    Serial.printf("  QMC5883L (0x0D)      : %s\n", qmcL ? "FOUND" : "missing");
+    Serial.printf("  QMC5883P (0x2C)      : %s\n", qmcP ? "FOUND" : "missing");
 
-    if (!hmc && !qmc) {
+    if (magCount == 0) {
         Serial.println("  -> no magnetometer: only the 6-DoF (acc_gyro) model can run");
+        Serial.println("     python ml_pipeline/export_model.py --axes acc_gyro");
     }
-    if (hmc && qmc) {
-        Serial.println("  -> both magnetometer addresses answered, check for a second board");
+    if (magCount > 1) {
+        Serial.println("  -> more than one magnetometer address answered; check for a");
+        Serial.println("     second board on the bus or an address conflict");
     }
 }
 

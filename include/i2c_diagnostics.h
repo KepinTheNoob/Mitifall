@@ -19,7 +19,8 @@ enum class DeviceKind : std::uint8_t {
     Mpu6050,        ///< WHO_AM_I = 0x68
     MpuVariant,     ///< MPU6500/9250/6555 family - register-compatible enough
     Hmc5883L,       ///< genuine Honeywell, ID regs spell "H43"
-    Qmc5883L,       ///< QST clone at 0x0D
+    Qmc5883L,       ///< QST QMC5883L clone at 0x0D
+    Qmc5883P,       ///< QST QMC5883P at 0x2C, chip ID 0x80
 };
 
 const char *deviceKindName(DeviceKind kind);

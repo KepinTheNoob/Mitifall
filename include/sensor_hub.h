@@ -1,10 +1,16 @@
 // =============================================================================
 //  sensor_hub.h - 9-DoF acquisition in the units the model was trained on
 // =============================================================================
-//  Wraps the MPU-6050 (accel + gyro) and the magnetometer, which may be either a
-//  genuine HMC5883L at 0x1E (Adafruit driver) or a QMC5883L clone at 0x0D
-//  (register-level driver below, because the two parts are not register
-//  compatible despite the similar name).
+//  Wraps the MPU-6050 (accel + gyro) and the magnetometer. Boards sold as
+//  "HMC5883L" ship one of three mutually incompatible parts, so all three are
+//  probed and driven:
+//
+//    0x1E  HMC5883L  genuine Honeywell   -> Adafruit driver
+//    0x0D  QMC5883L  QST clone           -> register-level driver
+//    0x2C  QMC5883P  QST, current part   -> register-level driver
+//
+//  They share a name but not a register map, which is why the Adafruit library
+//  alone cannot cover them.
 //
 //  Output units match the UMAFall training data:
 //    accelerometer  g       (Adafruit reports m/s^2 -> divided by 9.80665)
@@ -43,7 +49,7 @@ struct Sample9 {
     std::uint32_t timestampMs = 0;
 };
 
-enum class MagKind : std::uint8_t { None, Hmc5883L, Qmc5883L };
+enum class MagKind : std::uint8_t { None, Hmc5883L, Qmc5883L, Qmc5883P };
 
 struct Status {
     bool imuReady = false;

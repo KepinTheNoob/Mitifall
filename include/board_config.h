@@ -17,7 +17,7 @@ namespace BoardConfig {
 // LOLIN C3 Mini variant defaults are SDA = 8, SCL = 10. Override here if your
 // wiring differs; scanner_main can sweep candidate pairs to find the real pins.
 constexpr int kI2cSdaPin = 8;
-constexpr int kI2cSclPin = 10;
+constexpr int kI2cSclPin = 9;
 constexpr std::uint32_t kI2cFrequencyHz = 400000;
 
 // Slower clock used while probing, for reliability on long jumper wires.
@@ -26,8 +26,12 @@ constexpr std::uint32_t kI2cProbeFrequencyHz = 100000;
 // Device addresses.
 constexpr std::uint8_t kMpu6050AddrPrimary = 0x68;    // AD0 low
 constexpr std::uint8_t kMpu6050AddrSecondary = 0x69;  // AD0 high
-constexpr std::uint8_t kHmc5883Addr = 0x1E;           // genuine Honeywell part
-constexpr std::uint8_t kQmc5883Addr = 0x0D;           // QST clone
+
+// Three magnetometer parts ship on boards sold as "HMC5883L", each with its own
+// address AND its own register map. All three are probed, in this order.
+constexpr std::uint8_t kHmc5883Addr = 0x1E;   // genuine Honeywell HMC5883L
+constexpr std::uint8_t kQmc5883lAddr = 0x0D;  // QST QMC5883L clone
+constexpr std::uint8_t kQmc5883pAddr = 0x2C;  // QST QMC5883P, the current part
 
 // ---------------------------------------------------------------------------
 // Actuators

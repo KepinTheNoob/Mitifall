@@ -54,9 +54,9 @@ strictly optional: **detection and the physical alarm never depend on WiFi**.
 │  └──────┬───────┘                                                                                 │
 │         │            ┌─────────────────┐     ┌──────────────────────┐     ┌────────────────────┐   │
 │  ┌──────┴───────┐    │   RING BUFFER   │     │  FEATURE EXTRACTOR   │     │   RANDOM FOREST    │   │
-│  │ HMC5883L 0x1E├───►│  100 samples    ├────►│  9 axes × 5 stats=45 ├────►│  60 trees, d≤10    │   │
-│  │ QMC5883L 0x0D│    │  2.0 s @ 50 Hz  │     │  |a|,|ω| max/µ/σ = 6 │     │  23 634 nodes      │   │
-│  └──────────────┘    │  hop 50 (50 %)  │     │  SMA acc + gyr   = 2 │     │  → P(fall) 0…1     │   │
+│  │ HMC5883L 0x1E│    │  100 samples    │     │  9 axes × 5 stats=45 │     │  60 trees, d≤10    │   │
+│  │ QMC5883L 0x0D├───►│  2.0 s @ 50 Hz  ├────►│  |a|,|ω| max/µ/σ = 6 ├────►│  23 634 nodes      │   │
+│  │ QMC5883P 0x2C│    │  hop 50 (50 %)  │     │  SMA acc + gyr   = 2 │     │  → P(fall) 0…1     │   │
 │   mx my mz (µT)      └─────────────────┘     │  ─────────────────── │     └─────────┬──────────┘   │
 │                       1 decision / second    │  53 features         │               │              │
 │                                              └──────────────────────┘               ▼              │
@@ -102,7 +102,7 @@ timeouts, so a dead broker cannot stall acquisition.
 |:-:|-----------|------|-------|
 | 1 | LOLIN C3 Mini (ESP32-C3) | MCU, WiFi, native USB | 4 MB flash, 320 KB SRAM, **no FPU** |
 | 2 | MPU-6050 | 6-DoF accelerometer + gyroscope | GY-521 breakout has pull-ups |
-| 3 | HMC5883L **or** QMC5883L | 3-DoF magnetometer | GY-271 boards are usually QMC clones |
+| 3 | HMC5883L / QMC5883L / **QMC5883P** | 3-DoF magnetometer | GY-271/GY-270 boards ship any of the three — see §2.3 |
 | 4 | Active buzzer | Audible alert | *Active* — drive HIGH, no PWM needed |
 | 5 | Vibration motor | Haptic alert | **Requires a driver transistor** |
 | 6 | TP4056 (USB-C) | 1S Li-Po charger | Prefer the DW01+FS8205 protected variant |
@@ -126,12 +126,22 @@ candidate pin pairs and prints the working combination.
 
 ### 2.3 I²C address map
 
-| Address | Device | Identification method |
-|:-------:|--------|----------------------|
-| `0x68` | MPU-6050 (AD0 low) | `WHO_AM_I` (reg `0x75`) returns `0x68` |
-| `0x69` | MPU-6050 (AD0 high) | same register, auto-detected |
-| `0x1E` | HMC5883L (genuine) | ID regs `0x0A–0x0C` spell `'H' '4' '3'` |
-| `0x0D` | QMC5883L (clone) | chip-ID reg `0x0D` returns `0xFF` |
+| Address | Device | Identification method | Driver |
+|:-------:|--------|----------------------|--------|
+| `0x68` | MPU-6050 (AD0 low) | `WHO_AM_I` (reg `0x75`) returns `0x68` | Adafruit MPU6050 |
+| `0x69` | MPU-6050 (AD0 high) | same register, auto-detected | Adafruit MPU6050 |
+| `0x1E` | HMC5883L (Honeywell, EOL) | ID regs `0x0A–0x0C` spell `'H' '4' '3'` | Adafruit HMC5883 |
+| `0x0D` | QMC5883L (QST clone) | chip-ID reg `0x0D` returns `0xFF` | built-in, `sensor_hub.cpp` |
+| `0x2C` | **QMC5883P** (QST, current) | chip-ID reg `0x00` returns `0x80` | built-in, `sensor_hub.cpp` |
+
+Boards sold as "HMC5883L" have silently changed part three times. Honeywell
+discontinued the HMC5883L, clones moved to the QMC5883L at `0x0D`, and current
+stock is usually the **QMC5883P at `0x2C`**. All three have **different register
+maps**, not just different addresses, so each needs its own driver. `sensor_hub`
+probes `0x1E → 0x0D → 0x2C` and reports which part it found.
+
+> Not to be confused with the **QMC6310**, a different QST magnetometer that lives
+> at `0x1C`. If your scan shows `0x1C`, this firmware does not yet drive it.
 
 ### 2.4 Power & charging topology
 
@@ -288,9 +298,10 @@ Declared in `platformio.ini` and fetched automatically on first build:
 | `knolleary/PubSubClient` | `^2.8` | `raw_stream` only |
 | `blynkkk/Blynk` | `^1.3.2` | `ml_inference` only |
 
-The QMC5883L clone is **not** supported by the Adafruit library — the two parts
-share a name but not a register map — so `sensor_hub.cpp` contains a small
-register-level driver for it.
+The Adafruit HMC5883 library only drives the genuine Honeywell part. The QST
+clones (QMC5883L at `0x0D`, QMC5883P at `0x2C`) share the name but not the
+register map, so `sensor_hub.cpp` carries a small register-level driver for each.
+No extra library is needed for them.
 
 ### 4.5 Credentials
 
@@ -658,18 +669,35 @@ Then reload the index: **PlatformIO: Rebuild IntelliSense Index**, or
 > Re-running `pio run -t compiledb` for a single environment **overwrites** the
 > merged database and the squiggles return on the other two entry points.
 
-### 8.2 QMC5883L clone at `0x0D` instead of `0x1E`
+### 8.2 Magnetometer answers at `0x0D` or `0x2C` instead of `0x1E`
 
-Most GY-271 boards sold as "HMC5883L" are QMC5883L clones — different I²C
-address *and* a different register map, so the Adafruit library cannot drive them.
-This is handled automatically: `sensor_hub.cpp` probes `0x1E`, verifies the `'H'
-'4' '3'` ID registers, and falls back to a register-level QMC driver at `0x0D`
-(continuous mode, 8 G range, 100 Hz ODR, `µT = raw / 30`).
+Boards sold as "HMC5883L" have changed silicon three times. Each part has a
+different address **and** a different register map, so this is not a matter of
+patching one constant:
 
-Run `[env:scanner]` to see which part you actually have. If **neither** address
-answers, check power and pull-ups first — then re-export a 6-DoF model
-(`--axes acc_gyro`), since `[env:ml_inference]` deliberately **refuses to run** a
-53-feature model without a magnetometer rather than feeding it zeros.
+| Address | Part | Data registers | Config | Sensitivity @ 8 G |
+|:-------:|------|:--------------:|--------|:-----------------:|
+| `0x1E` | HMC5883L | `0x03–0x08` | Adafruit library | — |
+| `0x0D` | QMC5883L | `0x00–0x05` | ctrl `0x09`/`0x0A`, set/reset `0x0B` | 3000 LSB/G → `µT = raw / 30` |
+| `0x2C` | QMC5883P | `0x01–0x06` | ctrl1 `0x0A`, ctrl2 `0x0B` | 3750 LSB/G → `µT = raw / 37.5` |
+
+All three are handled automatically. `sensor_hub` probes `0x1E` and verifies the
+`'H' '4' '3'` ID registers, then `0x0D`, then `0x2C` verifying chip ID `0x80`, and
+reports the winner:
+
+```
+  QMC5883P ready at 0x2C (8 G range, 100 Hz ODR, 3750 LSB/G)
+```
+
+On the QMC5883P, note that a soft reset (ctrl2 bit 7) clears the control
+registers, so range must be written **before** mode — the driver does this in the
+right order.
+
+If a scan shows `0x1C`, that is a **QMC6310**, a different QST part that this
+firmware does not yet drive. If **no** magnetometer address answers, check power
+and pull-ups first, then re-export a 6-DoF model (`--axes acc_gyro`), since
+`[env:ml_inference]` deliberately **refuses to run** a 53-feature model without a
+magnetometer rather than feeding it zeros.
 
 ### 8.3 Adafruit IO rate limiting (30 data points/minute)
 
