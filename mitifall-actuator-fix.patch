@@ -1,0 +1,41 @@
+diff --git a/include/board_config.h b/include/board_config.h
+index 4851e5a..d2ce9d1 100644
+--- a/include/board_config.h
++++ b/include/board_config.h
+@@ -37,7 +37,7 @@ constexpr std::uint8_t kQmc5883pAddr = 0x2C;  // QST QMC5883P, the current part
+ // Actuators
+ // ---------------------------------------------------------------------------
+ constexpr int kBuzzerPin = 4;     // active buzzer module input
+-constexpr int kVibrationPin = 1;  // vibration motor driver input
++constexpr int kVibrationPin = 0;  // vibration motor driver input (README + wiring: GPIO0)
+ 
+ // Polarity is per device, because a buzzer breakout and a motor driver board are
+ // often wired the opposite way round from each other.
+@@ -54,7 +54,8 @@ constexpr int kVibrationPin = 1;  // vibration motor driver input
+ // (not tied to VCC/GND) and that the motor is fed through the driver transistor
+ // rather than straight off the 3V3 rail.
+ constexpr bool kBuzzerActiveHigh = false;
+-constexpr bool kVibrationActiveHigh = false;
++// Coin-motor module: IN drives the base of an NPN transistor, so HIGH = motor on.
++constexpr bool kVibrationActiveHigh = true;
+ 
+ // ---------------------------------------------------------------------------
+ // Dismiss button
+diff --git a/src/alarm_manager.cpp b/src/alarm_manager.cpp
+index c17b05e..1dc7708 100644
+--- a/src/alarm_manager.cpp
++++ b/src/alarm_manager.cpp
+@@ -58,7 +58,12 @@ void pollButton() {
+ 
+     gButtonStable = raw;
+     if (gButtonStable) {  // press edge
+-        gDismissPending = true;
++        // Only a press that actually silenced an alarm counts as a dismissal.
++        // Otherwise an idle press would start the re-trigger cooldown in
++        // inference_main and suppress a real fall for the next few seconds.
++        if (gState == State::Alerting) {
++            gDismissPending = true;
++        }
+         cancel();
+     }
+ }

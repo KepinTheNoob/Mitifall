@@ -21,29 +21,10 @@
 // ---------------------------------------------------------------------------
 // WiFi - used by [env:raw_stream] and [env:ml_inference]
 // ---------------------------------------------------------------------------
+// WPA2-Personal only: one SSID, one shared password (home router or phone
+// hotspot). Networks that ask for a per-user login are not supported.
 #define WIFI_SSID ""
-
-// Only used when WIFI_EAP_ENABLED is 0 (home network / phone hotspot).
 #define WIFI_PASSWORD ""
-
-// ---------------------------------------------------------------------------
-// WPA2-Enterprise (campus / eduroam style EAP handshake)
-// ---------------------------------------------------------------------------
-// 1 for a university network that asks for a username and password, 0 for a
-// normal network with a single shared password.
-#define WIFI_EAP_ENABLED 0
-
-// 0 = TLS (needs client certificate), 1 = PEAP-MSCHAPv2 (almost always this),
-// 2 = TTLS-MSCHAPv2.
-#define WIFI_EAP_METHOD 1
-
-// Outer identity, sent unencrypted. Leave "" to reuse WIFI_EAP_USERNAME.
-#define WIFI_EAP_IDENTITY ""
-#define WIFI_EAP_USERNAME ""
-#define WIFI_EAP_PASSWORD ""
-
-// Optional: PEM of the RADIUS server's CA, as a string literal.
-// #define WIFI_EAP_CA_PEM "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
 
 // ---------------------------------------------------------------------------
 // Adafruit IO - [env:raw_stream]

@@ -36,8 +36,8 @@ constexpr std::uint8_t kQmc5883pAddr = 0x2C;  // QST QMC5883P, the current part
 // ---------------------------------------------------------------------------
 // Actuators
 // ---------------------------------------------------------------------------
-constexpr int kBuzzerPin = 4;     // active buzzer module input
-constexpr int kVibrationPin = 1;  // vibration motor driver input
+constexpr int kBuzzerPin = 2;     // active buzzer module input
+constexpr int kVibrationPin = 1;  // vibration motor driver input (README + wiring: GPIO0)
 
 // Polarity is per device, because a buzzer breakout and a motor driver board are
 // often wired the opposite way round from each other.
@@ -53,8 +53,9 @@ constexpr int kVibrationPin = 1;  // vibration motor driver input
 // wiring, not firmware: check that the module's IN pin is actually on the GPIO
 // (not tied to VCC/GND) and that the motor is fed through the driver transistor
 // rather than straight off the 3V3 rail.
-constexpr bool kBuzzerActiveHigh = false;
-constexpr bool kVibrationActiveHigh = false;
+constexpr bool kBuzzerActiveHigh = true;
+// Coin-motor module: IN drives the base of an NPN transistor, so HIGH = motor on.
+constexpr bool kVibrationActiveHigh = true;
 
 // ---------------------------------------------------------------------------
 // Dismiss button

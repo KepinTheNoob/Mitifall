@@ -58,7 +58,12 @@ void pollButton() {
 
     gButtonStable = raw;
     if (gButtonStable) {  // press edge
-        gDismissPending = true;
+        // Only a press that actually silenced an alarm counts as a dismissal.
+        // Otherwise an idle press would start the re-trigger cooldown in
+        // inference_main and suppress a real fall for the next few seconds.
+        if (gState == State::Alerting) {
+            gDismissPending = true;
+        }
         cancel();
     }
 }
@@ -135,6 +140,16 @@ void update() {
     // Unsigned subtraction keeps this correct across the 49-day millis() wrap.
     if (now - gAlertStartedMs >= gActivePattern.durationMs) {
         cancel();
+        return;
+    }
+
+    // pulseOffMs == 0 means "single shot": energise once for pulseOnMs and stop.
+    // Without this, a zero-length off phase would toggle on every iteration and
+    // buzz at the loop rate.
+    if (gActivePattern.pulseOffMs == 0) {
+        if (now - gAlertStartedMs >= gActivePattern.pulseOnMs) {
+            cancel();
+        }
         return;
     }
 

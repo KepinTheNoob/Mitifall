@@ -58,7 +58,7 @@
 // secrets.h configures.
 // ---------------------------------------------------------------------------
 #define AIO_FEED_ACCEL_MAG AIO_USERNAME "/feeds/accel-mag"
-#define AIO_FEED_MOTION_STATUS AIO_USERNAME "/feeds/motion-status"
+#define AIO_FEED_FALL_DETECTED AIO_USERNAME "/feeds/fall-detected"
 #define AIO_FEED_BUZZER_COMMAND AIO_USERNAME "/feeds/buzzer-command"
 
 // Adafruit IO publishes rate-limit warnings here; subscribing turns a silent
@@ -83,29 +83,31 @@ inline bool credentialsConfigured() {
 // The free tier allows 30 data points per minute across ALL feeds, so the
 // budget has to be counted per feed, not per publish call:
 //
-//   accel-mag     every 2.5 s            -> 24 points/min
-//   motion-status on change, >=15 s apart ->  4 points/min worst case
-//                                          ---------------
-//                                            28 points/min
+//   accel-mag      every 2.5 s          -> 24 points/min
+//   fall-detected  on detection only    -> ~0 points/min (2 per event)
+//                                        ---------------
+//                                          24 points/min
 //
-// Publishing both feeds every 2.5 s would be 48 points/min and would get
-// throttled, which is why motion-status is edge-triggered instead of periodic.
+// Only accel-mag is periodic. A second feed published on the same 2.5 s cadence
+// would take the total to 48 points/min and get throttled, which is why
+// fall-detected is edge-triggered: 1 on detection, 0 when the alert clears.
 constexpr std::uint32_t kPublishIntervalMs = 2500;
-constexpr std::uint32_t kMotionMinIntervalMs = 15000;
 
 // MQTT reconnect backoff (non-blocking; the sampling loop keeps running).
 constexpr std::uint32_t kMqttRetryIntervalMs = 5000;
 constexpr std::uint16_t kMqttKeepAliveSec = 60;
 
 // ---------------------------------------------------------------------------
-// Motion indicator
+// Local moving/static hint
 // ---------------------------------------------------------------------------
+// Not published any more - used only for the "-> MOVING / static" annotation on
+// the serial status line, as a sanity check that the accelerometer is alive.
+//
 // "Moving" is the standard deviation of |a| over the publish window exceeding
 // this cut. Measured on the UMAFall wrist data, a 0.10 g cut flags 80 % of
 // dynamic-activity windows (walking, jogging, stairs) and 49 % of quiet ones
-// (lying down, phone call, sitting). The overlap is inherent: wrist-worn
-// "quiet" activities still swing the arm. Treat this as a coarse activity
-// light, not a classifier.
+// (lying down, phone call, sitting), so it was never a good enough signal to be
+// worth a dashboard widget.
 constexpr float kMotionStdThresholdG = 0.10f;
 
 }  // namespace AdafruitIoConfig

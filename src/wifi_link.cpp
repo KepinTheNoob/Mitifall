@@ -2,11 +2,6 @@
 
 #include <WiFi.h>
 
-// ESP-IDF 4.x enterprise supplicant API. Present in this core (the Arduino
-// WiFiSTA.cpp includes the same header); used here for the TTLS phase-2 method
-// and the clock check, which the Arduino wrapper does not expose.
-#include "esp_wpa2.h"
-
 #if __has_include("secrets.h")
 #include "secrets.h"
 #endif
@@ -14,11 +9,10 @@
 namespace WifiLink {
 namespace {
 
-enum class Mode : std::uint8_t { Disabled, Psk, Enterprise };
+enum class Mode : std::uint8_t { Disabled, Psk };
 
 const char *gSsid = nullptr;
 const char *gPassword = nullptr;
-EapCredentials gEap;
 Mode gMode = Mode::Disabled;
 
 Stream *gLog = nullptr;
@@ -28,13 +22,70 @@ bool gWasConnected = false;
 bool gJustConnected = false;
 std::uint32_t gLastAttemptMs = 0;
 std::uint32_t gReconnects = 0;
+std::uint32_t gAttempts = 0;
+
+volatile std::uint8_t gLastReason = 0;
+volatile bool gReasonPending = false;
+bool gEventHooked = false;
+
+// One failure line per attempt: the driver emits several disconnect events per
+// association attempt and the log becomes unreadable otherwise.
+std::uint32_t gReportedFailureForAttempt = 0;
+
+// Strongest matching AP seen during the startup scan. Associating directly to a
+// known BSSID and channel skips the full-channel scan, which is markedly more
+// reliable in a congested band.
+bool gHaveBssid = false;
+std::uint8_t gBssid[6] = {0};
+std::int32_t gChannel = 0;
 
 bool empty(const char *text) { return text == nullptr || text[0] == '\0'; }
+
+/// True when the configured network is open (no passphrase).
+bool isOpenNetwork() { return empty(gPassword); }
+
+void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+        gLastReason = info.wifi_sta_disconnected.reason;
+        gReasonPending = true;
+    }
+}
+
+const char *authModeName(wifi_auth_mode_t mode) {
+    switch (mode) {
+        case WIFI_AUTH_OPEN:
+            return "OPEN (no encryption)";
+        case WIFI_AUTH_WEP:
+            return "WEP";
+        case WIFI_AUTH_WPA_PSK:
+            return "WPA-PSK";
+        case WIFI_AUTH_WPA2_PSK:
+            return "WPA2-PSK";
+        case WIFI_AUTH_WPA_WPA2_PSK:
+            return "WPA/WPA2-PSK";
+        case WIFI_AUTH_WPA2_ENTERPRISE:
+            return "WPA2-Enterprise (EAP) - NOT supported by this firmware";
+        case WIFI_AUTH_WPA3_PSK:
+            return "WPA3-PSK";
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            return "WPA2/WPA3-PSK";
+        default:
+            return "unknown";
+    }
+}
 
 void prepareRadio() {
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
+    if (!gEventHooked) {
+        WiFi.onEvent(onWifiEvent);
+        gEventHooked = true;
+    }
+    // Let update() own all retry timing. With the driver's own auto-reconnect
+    // enabled as well, the two fight: it re-associates underneath us while we are
+    // issuing begin(), which shows up as a burst of AUTH_EXPIRE (reason 2) events
+    // for a single logical attempt.
+    WiFi.setAutoReconnect(false);
     if (gOptions.disableSleep) {
         // Modem sleep adds up to ~100 ms of latency to every publish; the power
         // saving is not worth it while streaming telemetry.
@@ -42,73 +93,84 @@ void prepareRadio() {
     }
 }
 
-void attemptPsk() {
-    WiFi.disconnect(false, false);
-    WiFi.begin(gSsid, gPassword);
-}
-
-void attemptEnterprise() {
-    WiFi.disconnect(false, false);
-
-    // The Arduino enterprise begin() calls strlen() on the identity without a
-    // null check, so an outer identity is always supplied; most campus setups
-    // accept the full username as the outer identity.
-    const char *identity = empty(gEap.identity) ? gEap.username : gEap.identity;
-
-    // With no CA PEM the supplicant cannot validate the server certificate, so
-    // certificate expiry checking is meaningless and the board has no wall clock
-    // at boot anyway. Disabling the time check avoids a spurious failure.
-    if (empty(gEap.caPem)) {
-        esp_wifi_sta_wpa2_ent_set_disable_time_check(true);
-    }
-
-    // The Arduino wrapper ignores `method` for phase 2, so TTLS needs this set
-    // explicitly or the handshake stalls after the outer tunnel comes up.
-    if (gEap.method == kEapTtls) {
-        esp_wifi_sta_wpa2_ent_set_ttls_phase2_method(ESP_EAP_TTLS_PHASE2_MSCHAPV2);
-    }
-
-    // Sets identity/username/password, installs certificates when provided,
-    // calls esp_wifi_sta_wpa2_ent_enable() and then associates.
-    WiFi.begin(gSsid, static_cast<wpa2_auth_method_t>(gEap.method), identity, gEap.username,
-               gEap.password, gEap.caPem, gEap.clientCertPem, gEap.clientKeyPem);
-}
-
 void attempt() {
     gLastAttemptMs = millis();
-    switch (gMode) {
-        case Mode::Psk:
-            attemptPsk();
-            break;
-        case Mode::Enterprise:
-            attemptEnterprise();
-            break;
-        default:
-            return;
+    ++gAttempts;
+    if (gMode != Mode::Psk) {
+        return;
     }
+    WiFi.disconnect(false, false);
+    WiFi.begin(gSsid, gPassword);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     if (gLog != nullptr) {
-        gLog->printf("WiFi: associating with \"%s\" (%s)\n", gSsid, modeName());
+        gLog->printf("WiFi: associating with \"%s\" (WPA2-PSK, attempt %lu)\n", gSsid,
+                     static_cast<unsigned long>(gAttempts));
     }
 }
 
 }  // namespace
 
-const char *modeName() {
-    switch (gMode) {
-        case Mode::Psk:
-            return "WPA2-PSK";
-        case Mode::Enterprise:
-            switch (gEap.method) {
-                case kEapTls:
-                    return "WPA2-Enterprise (TLS)";
-                case kEapTtls:
-                    return "WPA2-Enterprise (TTLS/MSCHAPv2)";
-                default:
-                    return "WPA2-Enterprise (PEAP/MSCHAPv2)";
-            }
+const char *modeName() { return gMode == Mode::Psk ? "WPA2-PSK" : "disabled"; }
+
+std::uint8_t lastDisconnectReason() { return gLastReason; }
+
+const char *disconnectReasonName(std::uint8_t reason) {
+    // Values from esp_wifi_types.h (wifi_err_reason_t). Only the ones that
+    // actually show up during bring-up are named individually.
+    switch (reason) {
+        case 1:
+            return "unspecified";
+        case 2:
+            return "previous auth no longer valid - wrong password?";
+        case 4:
+            return "disassociated due to inactivity";
+        case 8:
+            return "deauth, station leaving";
+        case 15:
+            return "4-way handshake timeout - WRONG PASSWORD";
+        case 23:
+            return "802.1X auth failed - this network needs EAP, not a shared key";
+        case 200:
+            return "beacon timeout - AP out of range";
+        case 201:
+            return "no AP found - SSID not visible on 2.4 GHz";
+        case 202:
+            return "auth failed";
+        case 203:
+            return "assoc failed";
+        case 204:
+            return "handshake timeout";
+        case 205:
+            return "connection failed";
         default:
-            return "disabled";
+            return "see wifi_err_reason_t in esp_wifi_types.h";
     }
+}
+
+void logVisibleNetworks(Stream &out, const char *ssid) {
+    out.printf("WiFi: scanning for \"%s\"...\n", ssid == nullptr ? "" : ssid);
+    const int found = WiFi.scanNetworks();
+    if (found <= 0) {
+        out.println("WiFi:   no networks visible at all - check the antenna/band");
+        WiFi.scanDelete();
+        return;
+    }
+
+    int matches = 0;
+    for (int i = 0; i < found; ++i) {
+        if (ssid != nullptr && WiFi.SSID(i) != ssid) {
+            continue;
+        }
+        ++matches;
+        out.printf("WiFi:   match ch=%d rssi=%d dBm auth=%s\n", WiFi.channel(i), WiFi.RSSI(i),
+                   authModeName(WiFi.encryptionType(i)));
+    }
+    out.printf("WiFi:   %d network(s) visible, %d matching the configured SSID\n", found, matches);
+    if (matches == 0) {
+        out.println("WiFi:   the SSID is NOT in range on 2.4 GHz. The ESP32-C3 has no 5 GHz");
+        out.println("WiFi:   radio, so a 5 GHz-only AP is invisible to it.");
+    }
+    WiFi.scanDelete();
 }
 
 void begin(const char *ssid, const char *password, Stream *log, const Options &options) {
@@ -128,76 +190,15 @@ void begin(const char *ssid, const char *password, Stream *log, const Options &o
     gMode = Mode::Psk;
 
     prepareRadio();
-
-    // Must come after WiFi.mode() has initialised the driver: leaving enterprise
-    // mode enabled from a previous session would break a plain PSK association.
-    esp_wifi_sta_wpa2_ent_disable();
-
-    attempt();
-}
-
-void beginEnterprise(const char *ssid, const EapCredentials &credentials, Stream *log,
-                     const Options &options) {
-    gLog = log;
-    gOptions = options;
-
-    if (empty(ssid)) {
-        gMode = Mode::Disabled;
-        if (gLog != nullptr) {
-            gLog->println("WiFi: no SSID configured, staying offline");
-        }
-        return;
+    if (gOptions.scanOnBegin && gLog != nullptr) {
+        logVisibleNetworks(*gLog, gSsid);
     }
-    if (empty(credentials.username) || empty(credentials.password)) {
-        gMode = Mode::Disabled;
-        if (gLog != nullptr) {
-            gLog->println("WiFi: enterprise mode needs WIFI_EAP_USERNAME and "
-                          "WIFI_EAP_PASSWORD in include/secrets.h, staying offline");
-        }
-        return;
-    }
-
-    // The supplicant caps these at 64 bytes and silently fails beyond it.
-    if (strlen(credentials.username) > 64 || strlen(credentials.password) > 64 ||
-        (credentials.identity != nullptr && strlen(credentials.identity) > 64)) {
-        gMode = Mode::Disabled;
-        if (gLog != nullptr) {
-            gLog->println("WiFi: EAP identity/username/password must be <= 64 chars");
-        }
-        return;
-    }
-
-    gSsid = ssid;
-    gEap = credentials;
-    gMode = Mode::Enterprise;
-
-    prepareRadio();
     attempt();
 }
 
 void beginFromSecrets(Stream *log, const Options &options) {
 #if defined(WIFI_SSID)
-#if defined(WIFI_EAP_ENABLED) && (WIFI_EAP_ENABLED)
-    EapCredentials eap;
-#if defined(WIFI_EAP_IDENTITY)
-    eap.identity = WIFI_EAP_IDENTITY;
-#endif
-#if defined(WIFI_EAP_USERNAME)
-    eap.username = WIFI_EAP_USERNAME;
-#endif
-#if defined(WIFI_EAP_PASSWORD)
-    eap.password = WIFI_EAP_PASSWORD;
-#endif
-#if defined(WIFI_EAP_METHOD)
-    eap.method = WIFI_EAP_METHOD;
-#endif
-#if defined(WIFI_EAP_CA_PEM)
-    eap.caPem = WIFI_EAP_CA_PEM;
-#endif
-    beginEnterprise(WIFI_SSID, eap, log, options);
-#else
     begin(WIFI_SSID, WIFI_PASSWORD, log, options);
-#endif
 #else
     (void)options;
     gMode = Mode::Disabled;
@@ -225,6 +226,18 @@ void update() {
         gLog->println("WiFi: connection lost");
     }
     gWasConnected = connected;
+
+    // Surface the driver's reason code: this is what separates "wrong password"
+    // (15) from "SSID not found" (201).
+    if (gReasonPending) {
+        gReasonPending = false;
+        const std::uint8_t reason = gLastReason;
+        if (gOptions.logDisconnectReason && gLog != nullptr && !connected) {
+            gLog->printf("WiFi: attempt %lu failed, reason %u (%s)\n",
+                         static_cast<unsigned long>(gAttempts), static_cast<unsigned>(reason),
+                         disconnectReasonName(reason));
+        }
+    }
 
     if (!connected && millis() - gLastAttemptMs >= gOptions.retryIntervalMs) {
         attempt();

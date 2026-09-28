@@ -82,8 +82,8 @@ strictly optional: **detection and the physical alarm never depend on WiFi**.
         ┌────────────────────────────┐                                    ┌────────────────────────────┐
         │  ADAFRUIT IO   (MQTT)      │                                    │  BLYNK IoT  (virtual pins) │
         │  [env:raw_stream]          │                                    │  [env:ml_inference]        │
-        │  ├─ accel-mag      chart   │                                    │  ├─ V0 probability  chart  │
-        │  ├─ motion-status  LED     │                                    │  ├─ V1 fall alert   LED    │
+        │  ├─ accel-mag       chart  │                                    │  ├─ V0 probability  chart  │
+        │  ├─ fall-detected   LED    │                                    │  ├─ V1 fall alert   LED    │
         │  └─ buzzer-command switch ─┼──► triggers alarm                  │  └─ V2 reset      button ──┼──► dismiss
         └────────────────────────────┘                                    └────────────────────────────┘
 ```
@@ -199,8 +199,9 @@ Mitifall/
 │   ├── i2c_diagnostics.h           # bus scan, chip ID, GPIO sweeper
 │   ├── sensor_hub.h                # 9-DoF acquisition in training units
 │   ├── feature_extractor.h         # ring buffer + 53-feature contract
-│   ├── alarm_manager.h             # non-blocking buzzer/vibration state machine
-│   ├── wifi_link.h                 # non-blocking WiFi (WPA2-PSK + Enterprise/EAP)
+│   ├── threshold_detector.h        # rule-based fall cascade, no ML (raw_stream)
+│   ├── alarm_manager.h             # non-blocking buzzer/vibration + dismiss button
+│   ├── wifi_link.h                 # non-blocking WiFi (WPA2-PSK) + link diagnostics
 │   ├── adafruit_io_config.h        # MQTT topics, rate budget, motion threshold (no secrets)
 │   ├── blynk_config.h              # virtual-pin map, push cadence (no secrets)
 │   ├── RandomForest.h              # ★ GENERATED — flat-array forest + probability API
@@ -212,6 +213,7 @@ Mitifall/
 │   ├── i2c_diagnostics.cpp         # shared
 │   ├── sensor_hub.cpp              # shared — MPU6050 + HMC5883L/QMC5883L drivers
 │   ├── feature_extractor.cpp       # shared — Arduino-free, host-testable
+│   ├── threshold_detector.cpp      # shared — Arduino-free, host-testable
 │   ├── alarm_manager.cpp           # shared
 │   ├── wifi_link.cpp               # shared
 │   ├── scanner_main.cpp            # entry point ▸ [env:scanner]
@@ -320,9 +322,9 @@ no silent placeholder fallbacks. If the file exists but the strings are still
 empty, the firmware detects that at boot, logs it, and runs fully offline rather
 than retrying a connection that cannot succeed.
 
-For campus WiFi using an EAP handshake, set `WIFI_EAP_ENABLED 1` and fill in
-`WIFI_EAP_USERNAME` / `WIFI_EAP_PASSWORD` (method `1` = PEAP-MSCHAPv2 covers
-almost all universities). See [§11.3](#113-wifi-modes).
+WiFi is **WPA2-Personal only** (one SSID, one shared password). Campus networks
+that require a per-user login are not supported — use a phone hotspot. See
+[§11.3](#113-wifi).
 
 ---
 
@@ -546,6 +548,46 @@ Simultaneously publishes to Adafruit IO and subscribes to the dashboard's buzzer
 toggle. Set `kEnableCloud = false` in `src/raw_stream_main.cpp` for purely local
 logging.
 
+#### Rule-based fall detection (no machine learning)
+
+This target also runs its own detector, deliberately independent of the Random
+Forest — no model, no feature extractor, no `RandomForest.h`. It is a three-stage
+cascade in `threshold_detector.cpp`:
+
+| Stage | Test | Default |
+|:-----:|------|---------|
+| 1 (optional) | free-fall dip in `|a|` | `< 0.60 g`, impact must follow within 800 ms |
+| 2 | impact spike in `|a|` | `>= 3.20 g` |
+| 3a | body goes still afterwards | `|a|` std `<= 0.50 g` over 1400 ms, starting 900 ms after impact |
+| 3b | orientation changed | tilt of the gravity vector `>= 28°` across the impact |
+
+An alarm fires only when **all** required stages pass, which is what separates a
+fall from sitting down hard or setting the wrist on a table — an impact on its own
+happens constantly in daily life. The pre-impact reference attitude comes from a
+1.5 s first-order filter on the accelerometer vector that is frozen the moment a
+candidate starts, so the comparison is against the posture *before* the fall.
+
+All timing is in milliseconds and driven by sample timestamps, so the logic is
+sample-rate agnostic — identical behaviour on the ~20 Hz recordings it was tuned
+against and at the firmware's 50 Hz. The decision lands ~2.3 s after impact.
+
+Stage 1 is **off** by default: requiring the free-fall dip drops sensitivity from
+0.86 to 0.63, because at 20 Hz the dip frequently falls between samples.
+
+Serial output shows accepted and rejected candidates, which is how you tune it on
+real motion:
+
+```
+# impact |a|=3.71g -> waiting for stillness + tilt
+# candidate rejected (still moving after impact): |a|max=3.71g std=0.812g tilt=12deg |w|peak=142dps
+*** FALL DETECTED (rule-based) #1  |a|max=4.62g  std=0.214g  tilt=63deg  |w|peak=228dps  detect=41us ***
+```
+
+Thresholds live in `ThresholdDetector::Config` (`include/threshold_detector.h`)
+with two alternative operating points documented in the comments. Set
+`kEnableFallDetection = false` to disable, or `kLogCandidates = false` to quieten
+the diagnostics.
+
 ### Step 3 — `[env:ml_inference]`: real-time edge inference
 
 ```bash
@@ -557,10 +599,10 @@ pio run -e ml_inference -t upload -t monitor      # or just: pio run -t upload -
  window    : 100 samples @ 50 Hz (2.0 s), hop 50 samples
  threshold : 0.30, confirmation 1 window(s)
 Model self-test: PASS (3 vectors, 412 us)
-WiFi mode: WPA2-Enterprise (PEAP/MSCHAPv2)
+WiFi mode: WPA2-PSK
 w0     p=0.017 votes=1/60  adl      feat=1832us infer=387us |a|max=1.04g cloud
 w1     p=0.412 votes=26/60 FALL?    feat=1829us infer=402us |a|max=3.71g cloud
-*** FALL DETECTED  p=0.412  alerting for 4000 ms ***
+*** FALL DETECTED  p=0.412  alerting for 500 ms ***
 ```
 
 Each window reports the probability, tree votes, feature-extraction and inference
@@ -577,7 +619,7 @@ latency from `micros()`, and whether telemetry is live.
 | Feed key | Type | Direction | Widget |
 |----------|------|-----------|--------|
 | `accel-mag` | numeric | device → cloud, every 2.5 s | Line Chart |
-| `motion-status` | numeric `0`/`1` | device → cloud, on change | Indicator |
+| `fall-detected` | numeric `0`/`1` | device → cloud, on detection | Indicator (red) |
 | `buzzer-command` | numeric `0`/`1` | cloud → device | Toggle |
 
 > **Naming discrepancy.** The firmware publishes to **`accel-mag`**. If you
@@ -595,7 +637,7 @@ yellow key icon → *Active Key*. Put them in `include/secrets.h` as
 | Widget | Feed | Settings |
 |--------|------|----------|
 | **Line Chart** | `accel-mag` | Y min `0`, Y max `4` (g); history 1 hour. Rest ≈ 1.0 g, walking 1.5–2.5 g, impacts higher |
-| **Indicator** | `motion-status` | Condition `= 1`, on-colour green, off grey |
+| **Indicator** | `fall-detected` | Condition `= 1`, on-colour red. Goes `1` on a rule-based detection, back to `0` when the 0.5 s alert ends or the GPIO3 button is pressed |
 | **Toggle** | `buzzer-command` | On `1`, Off `0` → fires buzzer + motor via `AlarmManager::trigger()` |
 
 ### 7.2 Blynk IoT (`[env:ml_inference]`)
@@ -711,12 +753,13 @@ budget is counted per feed, not per publish call:
 | Feed | Cadence | Points/min |
 |------|---------|:----------:|
 | `accel-mag` | every 2.5 s | 24 |
-| `motion-status` | on change, ≥ 15 s apart | ≤ 4 |
-| **Total** | | **≤ 28** |
+| `fall-detected` | on detection only | ~0 (2 per event) |
+| **Total** | | **~24** |
 
-That is why `motion-status` is edge-triggered rather than periodic. The firmware
-also subscribes to `{user}/throttle` and `{user}/errors`, so a violation appears
-as a log line instead of silent data loss:
+Only `accel-mag` is periodic; `fall-detected` is edge-triggered, publishing `1` on
+a detection and `0` when the alert clears. The firmware also subscribes to
+`{user}/throttle` and `{user}/errors`, so a violation appears as a log line
+instead of silent data loss:
 
 ```
 # ADAFRUIT IO WARNING: ...
@@ -750,7 +793,7 @@ Both are already set. Additional notes:
 
 | Symptom | Cause |
 |---------|-------|
-| `associating…` repeats, never `connected` | Wrong PSK, or an EAP network with `WIFI_EAP_ENABLED 0` |
+| `associating…` repeats, never `connected` | Wrong password (reason 15), SSID not on 2.4 GHz (201), or the network needs a per-user login (23) — read the printed reason code |
 | `connected, ip=…` then `mqtt connect failed, state=-2` | Captive portal, or outbound port 1883 blocked |
 | Works on a phone hotspot, not on campus | Network policy, not firmware |
 
@@ -811,6 +854,17 @@ Two independent paths, both non-blocking:
 | **Physical button** | GPIO3 → GND, 40 ms debounce, handled in `AlarmManager::update()` |
 | **Dashboard** | Blynk `V2` push button (`ml_inference`), or the Adafruit IO toggle (`raw_stream`) |
 
+Both fall-detection targets raise the **same** alert: a single solid **0.5 s**
+burst of buzzer plus vibration motor, defined once by the defaults of
+`AlarmManager::Pattern` and triggered by `AlarmManager::trigger()` with no
+argument. Editing that struct changes both environments together, so they cannot
+drift apart. Setting a non-zero `pulseOffMs` turns it into a repeating pulse train
+instead; `pulseOffMs = 0` means single-shot.
+
+Note that with a 0.5 s alert the re-trigger cooldowns now dominate how often you
+can be alerted: `RETRIGGER_COOLDOWN_MS = 6000` in `inference_main.cpp` and
+`Config::cooldownMs = 5000` in the rule-based detector.
+
 A button press stops both actuators immediately, clears the latched detection
 state, restarts the re-trigger cooldown, and pushes `V1 = 0` to Blynk. In
 `raw_stream` it also publishes `0` back to `buzzer-command` so the dashboard
@@ -866,7 +920,52 @@ the only candidate that ports cleanly to flash as a compact table.
 Dropping the magnetometer **improves** generalisation. See
 [§12.1](#121-the-magnetometer-features-do-not-transfer).
 
-### 9.4 On-device model
+### 9.4 Rule-based detector (`[env:raw_stream]`, no ML)
+
+Evaluated by replaying all 746 processed recordings through the **actual firmware
+source** (`src/threshold_detector.cpp`, compiled on the host) and asking the
+recording-level question: *did this 15 s trial raise an alarm?*
+
+The grid search over thresholds is itself a form of fitting, so both views are
+reported. The LOSO column picks the configuration using 18 subjects and scores it
+on the held-out one, matching the protocol used for the forest:
+
+| View | Sensitivity | Specificity | Precision | F1 | TP | FN | FP | TN |
+|------|:-----------:|:-----------:|:---------:|:--:|:--:|:--:|:--:|:--:|
+| **Pooled LOSO** (honest) | 0.856 | 0.942 | 0.852 | 0.854 | 178 | 30 | 31 | 507 |
+| In-sample (optimistic) | 0.880 | 0.952 | 0.876 | 0.878 | 183 | 25 | 26 | 512 |
+
+The small gap between them, and the fact that 16 of 19 folds independently
+selected the same thresholds, suggests the operating point generalises rather than
+being fitted to this dataset.
+
+Alternative operating points, both measured:
+
+| Preset | `impactG` | `stillStdG` | Sensitivity | Specificity |
+|--------|:---------:|:-----------:|:-----------:|:-----------:|
+| More sensitive | 2.6 | 0.50 | 0.933 | 0.913 |
+| **Shipped default** | 3.2 | 0.50 | 0.880 | 0.952 |
+| Fewer false alarms | 3.0 | 0.32 | 0.827 | 0.954 |
+
+**Comparing the two detectors is not apples-to-apples.** The forest is scored per
+2 s window (one decision per second, ~9 683 decisions); the rule is scored per
+recording (one verdict per 15 s trial). A window-level specificity of 0.948 and a
+recording-level specificity of 0.942 describe different things — the latter is the
+more flattering framing, because a single trial contains ~13 windows and only needs
+to avoid tripping once. Judge them on their intended use: the rule is a compact,
+explainable, zero-model baseline; the forest sees more of the signal and can be
+tuned continuously via its probability output.
+
+| | Rule-based | Random Forest |
+|---|---|---|
+| Environment | `raw_stream` | `ml_inference` |
+| Flash cost | ~4 KB of code | ~208 KiB of tables |
+| Tunable knobs | 8 thresholds | 1 probability threshold |
+| Decision latency | ~2.3 s after impact | ≤1 s after window closes |
+| Explainability | full — prints why it rejected | probability only |
+| Training required | none | LOSO-validated pipeline |
+
+### 9.5 On-device model
 
 | Property | Value |
 |----------|-------|
@@ -881,9 +980,9 @@ Dropping the magnetometer **improves** generalisation. See
 
 | Environment | RAM | Flash | Notes |
 |-------------|:---:|:-----:|-------|
-| `scanner` | 5.0 % (16 344 B) | 20.3 % (266 190 B) | No WiFi stack linked |
-| `raw_stream` | 12.2 % (39 884 B) | 67.6 % (885 806 B) | + WiFi, EAP supplicant, PubSubClient |
-| `ml_inference` | 13.7 % (44 764 B) | **85.0 %** (1 114 738 B) | + Blynk, 208 KiB forest |
+| `scanner` | 5.1 % (16 600 B) | 21.2 % (277 386 B) | No WiFi stack linked |
+| `raw_stream` | 12.1 % (39 596 B) | 58.7 % (769 790 B) | + WiFi, PubSubClient, rule detector |
+| `ml_inference` | 13.5 % (44 300 B) | **75.8 %** (993 420 B) | + Blynk, 208 KiB forest |
 
 Budget is against 320 KB SRAM and the default 1.31 MB app partition. The ESP32-C3
 has **no hardware FPU**, so all `float` maths is software-emulated — the reason
@@ -925,17 +1024,41 @@ saw during training.
 | Angular velocity | **°/s** | rad/s | `× 180/π` |
 | Magnetic field | see §12.1 | µT | none |
 
-### 11.3 WiFi modes
+### 11.3 WiFi
 
-| `WIFI_EAP_ENABLED` | Mode | Fields used |
-|:------------------:|------|-------------|
-| `0` | WPA2-Personal | `WIFI_SSID`, `WIFI_PASSWORD` |
-| `1` | WPA2-Enterprise | `WIFI_SSID`, `WIFI_EAP_IDENTITY`, `WIFI_EAP_USERNAME`, `WIFI_EAP_PASSWORD`, `WIFI_EAP_METHOD` |
+**WPA2-Personal only** — one SSID and one shared password, from
+`include/secrets.h`:
 
-`WIFI_EAP_METHOD`: `0` = TLS (needs a client certificate), `1` = PEAP-MSCHAPv2
-(almost all campuses), `2` = TTLS-MSCHAPv2. Leave `WIFI_EAP_IDENTITY` empty to
-reuse the username as the outer identity. Credentials are capped at **64 bytes**
-by the supplicant; longer values are rejected with a log line.
+```cpp
+#define WIFI_SSID     "my-network"
+#define WIFI_PASSWORD "my-password"
+```
+
+Networks that ask for a per-user login (WPA2-Enterprise / EAP, typical on campus)
+are **not supported**. Use a phone hotspot or a home router. The firmware reports
+this clearly rather than retrying blindly: `begin()` scans once and prints the
+encryption of the matching SSID, and every failed attempt prints the driver's
+reason code.
+
+```
+WiFi: scanning for "Dhe"...
+WiFi:   match ch=6 rssi=-48 dBm auth=WPA2-PSK
+WiFi:   11 network(s) visible, 1 matching the configured SSID
+WiFi: associating with "Dhe" (WPA2-PSK, attempt 1)
+WiFi: connected, ip=192.168.43.12 rssi=-48 dBm
+```
+
+Reason codes worth knowing:
+
+| Reason | Meaning |
+|:--:|---|
+| `15` | 4-way handshake timeout — **wrong password** |
+| `201` | No AP found — SSID not visible on 2.4 GHz (the C3 has no 5 GHz radio) |
+| `23` | 802.1X auth failed — that network needs EAP, which this firmware does not do |
+| `200` | Beacon timeout — AP out of range |
+
+An empty `WIFI_SSID` makes the firmware skip networking entirely and run offline,
+with detection and the local alarm fully functional.
 
 ---
 
@@ -991,10 +1114,9 @@ sizes range from 130 to 2 457 windows.
 - **MQTT is plaintext** on port 1883, so the Adafruit IO key crosses the network in
   the clear. Lab-grade, not production. Port 8883 with `WiFiClientSecure` and a CA
   bundle is the upgrade path.
-- **EAP without a CA certificate** cannot verify the RADIUS server, so the device
-  will hand campus credentials to any AP advertising the same SSID — an evil-twin
-  risk with your real account. Set `WIFI_EAP_CA_PEM` if IT will provide the
-  certificate.
+- **The WiFi password is a shared key in flash.** WPA2-PSK only, no certificate
+  validation of the AP, so the device will associate with any access point
+  advertising the configured SSID.
 - **Credentials live in flash in plaintext** and are readable via
   `esptool read_flash`. `include/secrets.h` is git-ignored, but do not lend the
   assembled device out.

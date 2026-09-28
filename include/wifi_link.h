@@ -1,5 +1,5 @@
 // =============================================================================
-//  wifi_link.h - non-blocking WiFi connection manager (WPA2-PSK + Enterprise)
+//  wifi_link.h - non-blocking WPA2-PSK connection manager
 // =============================================================================
 //  Shared by both cloud targets. Deliberately knows nothing about MQTT or Blynk
 //  so it can compile in every environment without pulling in their libraries.
@@ -8,11 +8,9 @@
 //  for an association, and update() returns immediately. Losing WiFi must never
 //  stop sampling, inference, or the local alarm.
 //
-//  Two association modes:
-//    * WPA2-Personal   ssid + pre-shared key (home / hotspot)
-//    * WPA2-Enterprise ssid + EAP identity/username/password (campus, eduroam)
-//
-//  Pick the mode once in include/secrets.h and call beginFromSecrets().
+//  Only WPA2-Personal (a single pre-shared key) is supported: home routers and
+//  phone hotspots. Networks needing a username and password per user
+//  (WPA2-Enterprise / EAP, typical on campus) are not handled.
 // =============================================================================
 
 #pragma once
@@ -23,45 +21,27 @@
 
 namespace WifiLink {
 
-// EAP outer methods, matching the Arduino wpa2_auth_method_t values. Use these
-// numbers for WIFI_EAP_METHOD in secrets.h.
-constexpr int kEapTls = 0;   ///< certificate based; needs client cert + key
-constexpr int kEapPeap = 1;  ///< PEAP-MSCHAPv2 - what most campuses use
-constexpr int kEapTtls = 2;  ///< TTLS, phase 2 forced to MSCHAPv2
-
-struct EapCredentials {
-    /// Outer identity sent in the clear. If null/empty, `username` is reused.
-    const char *identity = nullptr;
-    const char *username = nullptr;
-    const char *password = nullptr;
-    int method = kEapPeap;
-
-    /// PEM of the RADIUS server's CA. Optional, but without it the supplicant
-    /// cannot verify the authentication server - see the note in the .cpp.
-    const char *caPem = nullptr;
-
-    /// Only for kEapTls.
-    const char *clientCertPem = nullptr;
-    const char *clientKeyPem = nullptr;
-};
-
 struct Options {
     std::uint32_t retryIntervalMs = 8000;  ///< gap between reconnect attempts
     bool disableSleep = true;              ///< keep latency low for MQTT/Blynk
+
+    /// Scan once during begin() and report what is visible for the target SSID:
+    /// channel, signal strength and the encryption in use. Blocks for ~2 s, which
+    /// is harmless inside setup().
+    bool scanOnBegin = true;
+
+    /// Print the driver's disconnect reason code on every failed attempt. This is
+    /// what distinguishes "wrong password" from "SSID not found".
+    bool logDisconnectReason = true;
 };
 
-/// WPA2-Personal. Returns immediately; poll with update()/isConnected().
+/// Start associating. Returns immediately; poll with update()/isConnected().
+/// `password` may be empty for an open network.
 void begin(const char *ssid, const char *password, Stream *log = nullptr,
            const Options &options = Options{});
 
-/// WPA2-Enterprise. Credential strings must outlive the call (string literals
-/// from secrets.h do). Returns immediately.
-void beginEnterprise(const char *ssid, const EapCredentials &credentials,
-                     Stream *log = nullptr, const Options &options = Options{});
-
-/// Start using whatever include/secrets.h defines, choosing Enterprise when
-/// WIFI_EAP_ENABLED is 1 and PSK otherwise. Safe to call in a build with no
-/// credentials compiled in: it logs and does nothing.
+/// Start using WIFI_SSID / WIFI_PASSWORD from include/secrets.h. Safe to call in
+/// a build with no credentials compiled in: it logs and does nothing.
 void beginFromSecrets(Stream *log = nullptr, const Options &options = Options{});
 
 /// Drive reconnection. Call every loop iteration. Never blocks.
@@ -69,7 +49,7 @@ void update();
 
 bool isConnected();
 
-/// True once begin*() has been called with usable credentials.
+/// True once begin*() has been called with a usable SSID.
 bool isEnabled();
 
 /// Empty string until connected.
@@ -82,7 +62,17 @@ bool consumeJustConnected();
 
 std::uint32_t reconnectCount();
 
-/// "WPA2-PSK", "WPA2-Enterprise (PEAP)", ... for status output.
+/// "WPA2-PSK" or "disabled", for status output.
 const char *modeName();
+
+/// Most recent driver disconnect reason code (0 = none seen yet).
+std::uint8_t lastDisconnectReason();
+
+/// Human-readable form of a disconnect reason code.
+const char *disconnectReasonName(std::uint8_t reason);
+
+/// Scan and print the networks matching `ssid` (blocking, ~2 s). Exposed so it
+/// can be re-run from a diagnostic command.
+void logVisibleNetworks(Stream &out, const char *ssid);
 
 }  // namespace WifiLink

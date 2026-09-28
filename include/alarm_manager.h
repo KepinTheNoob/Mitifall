@@ -13,10 +13,20 @@
 
 namespace AlarmManager {
 
+/// Shape of an alert burst.
+///
+/// The defaults are a single solid 0.5 s pulse: `pulseOnMs == durationMs` with no
+/// off phase, so the actuators energise once and stop. Both fall-detection paths
+/// ([env:ml_inference] and [env:raw_stream]) call trigger() with no argument and
+/// therefore share this pattern - change it here and both stay identical.
+///
+/// For a repeating pulse train instead, set an off phase shorter than the total,
+/// e.g. `{pulseOnMs = 180, pulseOffMs = 120, durationMs = 4000}` gives ~13 beeps
+/// over four seconds.
 struct Pattern {
-    std::uint32_t pulseOnMs = 180;    ///< actuators energised
-    std::uint32_t pulseOffMs = 120;   ///< gap between pulses
-    std::uint32_t durationMs = 4000;  ///< total alert length
+    std::uint32_t pulseOnMs = 500;   ///< actuators energised
+    std::uint32_t pulseOffMs = 0;    ///< gap between pulses (0 = no repeat)
+    std::uint32_t durationMs = 500;  ///< total alert length
     bool useBuzzer = true;
     bool useVibration = true;
 };
