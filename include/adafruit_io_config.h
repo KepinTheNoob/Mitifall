@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #if __has_include("secrets.h")
@@ -61,6 +62,11 @@
 #define AIO_FEED_FALL_DETECTED AIO_USERNAME "/feeds/fall-detected"
 #define AIO_FEED_BUZZER_COMMAND AIO_USERNAME "/feeds/buzzer-command"
 
+// Event-driven feeds. None of these is published on a timer.
+#define AIO_FEED_FALL_TILT AIO_USERNAME "/feeds/fall-tilt"          // posture change, deg
+#define AIO_FEED_FALL_LOG AIO_USERNAME "/feeds/fall-log"            // timestamped incidents
+#define AIO_FEED_DEVICE_STATUS AIO_USERNAME "/feeds/device-status"  // ONLINE / OFFLINE
+
 // Adafruit IO publishes rate-limit warnings here; subscribing turns a silent
 // throttle into a visible log line.
 #define AIO_TOPIC_THROTTLE AIO_USERNAME "/throttle"
@@ -84,14 +90,53 @@ inline bool credentialsConfigured() {
 // budget has to be counted per feed, not per publish call:
 //
 //   accel-mag      every 2.5 s          -> 24 points/min
-//   fall-detected  on detection only    -> ~0 points/min (2 per event)
+//   fall-detected  on detection only    ->  2 per fall (1, then 0)
+//   fall-tilt      on detection only    ->  1 per fall
+//   fall-log       on detection/dismiss ->  1 per fall + 1 per dismissal
+//   device-status  on (re)connect only  ->  1 per MQTT connection
 //                                        ---------------
-//                                          24 points/min
+//                                          24 points/min + ~5 per incident
 //
 // Only accel-mag is periodic. A second feed published on the same 2.5 s cadence
-// would take the total to 48 points/min and get throttled, which is why
-// fall-detected is edge-triggered: 1 on detection, 0 when the alert clears.
+// would take the total to 48 points/min and get throttled, which is why every
+// other feed is edge-triggered. A fall costs 4 points and a dismissal 2 (fall-log
+// plus the existing buzzer-command reset), leaving room for one incident a minute.
 constexpr std::uint32_t kPublishIntervalMs = 2500;
+
+// ---------------------------------------------------------------------------
+// device-status lifecycle
+// ---------------------------------------------------------------------------
+// The Last Will is registered on every CONNECT: QoS 1, retained, "OFFLINE".
+//
+// PLATFORM LIMITATION: the Adafruit IO broker does not support Last Will and
+// does not honour the retain flag (Adafruit IO FAQ / MQTT API docs). The will is
+// therefore never published by io.adafruit.com and the feed keeps showing
+// "ONLINE" after the device dies. The will is still registered so the firmware
+// behaves correctly on a standards-compliant broker; for offline detection on
+// Adafruit IO, use a feed notification on accel-mag (see README).
+constexpr std::uint8_t kWillQos = 1;
+constexpr bool kWillRetain = true;
+constexpr char kStatusOnline[] = "ONLINE";
+constexpr char kStatusOffline[] = "OFFLINE";
+
+// If a CONNECT carrying a will keeps failing while WiFi is up, try one plain
+// CONNECT. If that succeeds, the broker is refusing the will and it is dropped
+// for the rest of the session - so the LWT can never take MQTT down entirely.
+constexpr std::uint8_t kWillFailuresBeforeFallback = 2;
+
+// ---------------------------------------------------------------------------
+// fall-log timestamps
+// ---------------------------------------------------------------------------
+// Wall-clock time comes from SNTP, started once WiFi first connects; it never
+// blocks. Until the clock is set, entries carry device uptime instead.
+// POSIX TZ string: WIB = UTC+7 (Western Indonesia Time).
+constexpr char kTimezonePosix[] = "WIB-7";
+constexpr char kNtpServer1[] = "pool.ntp.org";
+constexpr char kNtpServer2[] = "time.google.com";
+
+// Events raised while MQTT is down are held and published on reconnect, stamped
+// with the time they happened. Oldest entries are dropped if this fills.
+constexpr std::size_t kEventQueueCapacity = 8;
 
 // MQTT reconnect backoff (non-blocking; the sampling loop keeps running).
 constexpr std::uint32_t kMqttRetryIntervalMs = 5000;

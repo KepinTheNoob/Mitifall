@@ -84,8 +84,11 @@ strictly optional: **detection and the physical alarm never depend on WiFi**.
         │  [env:raw_stream]          │                                    │  [env:ml_inference]        │
         │  ├─ accel-mag       chart  │                                    │  ├─ V0 probability  chart  │
         │  ├─ fall-detected   LED    │                                    │  ├─ V1 fall alert   LED    │
-        │  └─ buzzer-command switch ─┼──► triggers alarm                  │  └─ V2 reset      button ──┼──► dismiss
-        └────────────────────────────┘                                    └────────────────────────────┘
+        │  ├─ fall-tilt       gauge  │                                    │  └─ V2 reset      button ──┼──► dismiss
+        │  ├─ fall-log        stream │                                    └────────────────────────────┘
+        │  ├─ device-status   text   │
+        │  └─ buzzer-command switch ─┼──► triggers alarm
+        └────────────────────────────┘
 ```
 
 **Timing contract.** The main loop performs exactly one unit of work per
@@ -620,7 +623,13 @@ latency from `micros()`, and whether telemetry is live.
 |----------|------|-----------|--------|
 | `accel-mag` | numeric | device → cloud, every 2.5 s | Line Chart |
 | `fall-detected` | numeric `0`/`1` | device → cloud, on detection | Indicator (red) |
+| `fall-tilt` | numeric, degrees | device → cloud, once per fall | Gauge |
+| `fall-log` | text | device → cloud, on fall and on dismissal | Stream |
+| `device-status` | text `ONLINE`/`OFFLINE` | device → cloud, on connect | Text |
 | `buzzer-command` | numeric `0`/`1` | cloud → device | Toggle |
+
+Only `accel-mag` is periodic. The other device → cloud feeds are **event-driven**:
+nothing is sent to them during normal sampling.
 
 > **Naming discrepancy.** The firmware publishes to **`accel-mag`**. If you
 > created a feed called `raw-accel-mag`, either rename the feed or change
@@ -638,7 +647,64 @@ yellow key icon → *Active Key*. Put them in `include/secrets.h` as
 |--------|------|----------|
 | **Line Chart** | `accel-mag` | Y min `0`, Y max `4` (g); history 1 hour. Rest ≈ 1.0 g, walking 1.5–2.5 g, impacts higher |
 | **Indicator** | `fall-detected` | Condition `= 1`, on-colour red. Goes `1` on a rule-based detection, back to `0` when the 0.5 s alert ends or the GPIO3 button is pressed |
+| **Gauge** | `fall-tilt` | Min `0`, max `180` (degrees). Shows the posture change of the most recent fall |
+| **Stream** | `fall-log` | Shows the incident history, newest first |
+| **Text** | `device-status` | Shows `ONLINE`; see the Last Will limitation below |
 | **Toggle** | `buzzer-command` | On `1`, Off `0` → fires buzzer + motor via `AlarmManager::trigger()` |
+
+#### Event feeds in detail
+
+**`fall-tilt`** carries the orientation change measured by cascade stage 3, as a
+single-decimal string such as `63.4`. It is published once when a fall is
+confirmed, so the value always clears the detector's `orientationChangeDeg`
+threshold: 28° by default, 15° under the bench-testing preset
+(`kSensitivityPreset = 3`).
+
+**`fall-log`** is a timestamped incident log:
+
+```
+[2026-09-30 14:03:12 WIB] FALL DETECTED
+[2026-09-30 14:03:41 WIB] DISMISSED BY USER
+```
+
+An incident opens on `FALL DETECTED` and closes on the next GPIO3 press, which
+logs `DISMISSED BY USER`. It is not tied to the actuators still running, because
+the alert only lasts 0.5 s. A press with no open incident logs nothing. The press
+is handled where the debounced event is consumed in the main loop, not in an
+interrupt: MQTT is not safe from interrupt context, and `AlarmManager` is shared
+by all three environments and has no network code.
+
+The clock comes from SNTP (`pool.ntp.org`, timezone `WIB-7`), started in the
+background after the first WiFi connection. Until it syncs, entries carry device
+uptime instead, e.g. `[uptime 00:00:42] FALL DETECTED`. Change `kTimezonePosix` in
+`adafruit_io_config.h` for another timezone.
+
+**Nothing is lost while MQTT is down.** `fall-tilt` and `fall-log` events go into
+an 8-entry queue that drains between samples, and on reconnect. The timestamp is
+taken when the event happens, so a late delivery still shows the right time. If
+the queue fills, the oldest entry is dropped.
+
+**`device-status`** gets `ONLINE`, published with the retain flag, immediately
+after each successful MQTT connection, and is never sent periodically. Every
+CONNECT also registers a Last Will of `OFFLINE` with QoS 1 and retain.
+
+> **Adafruit IO limitation.** The Adafruit IO broker supports neither Last Will
+> messages ([IO FAQ](https://learn.adafruit.com/welcome-to-adafruit-io/io-faq))
+> nor the retain flag
+> ([MQTT API](https://io.adafruit.com/api/docs/mqtt.html#retained-values)).
+> The firmware registers both correctly, but on io.adafruit.com the `OFFLINE` will
+> is never delivered, so the feed keeps showing `ONLINE` after the device dies.
+> The retain flag makes no difference either: IO always keeps each feed's last
+> value anyway. On a standards-compliant broker such as Mosquitto, both behave as
+> specified. To detect an offline device on Adafruit IO, open the `accel-mag` feed
+> and add a **Feed Notification** for when no data arrives for a set period, e.g.
+> 5 minutes. `accel-mag` publishes every 2.5 s, so silence means the device is
+> gone.
+
+If a broker ever refuses a CONNECT that carries a will, the firmware retries
+without it after two failures and logs
+`broker rejected the Last Will; connected without it`, so the LWT can never take
+MQTT down entirely.
 
 ### 7.2 Blynk IoT (`[env:ml_inference]`)
 
@@ -753,11 +819,15 @@ budget is counted per feed, not per publish call:
 | Feed | Cadence | Points/min |
 |------|---------|:----------:|
 | `accel-mag` | every 2.5 s | 24 |
-| `fall-detected` | on detection only | ~0 (2 per event) |
-| **Total** | | **~24** |
+| `fall-detected` | on detection only | 2 per fall (`1`, then `0`) |
+| `fall-tilt` | on detection only | 1 per fall |
+| `fall-log` | on detection and dismissal | 1 per fall + 1 per dismissal |
+| `device-status` | on (re)connect only | 1 per connection |
+| **Total** | | **24 + ~5 per incident** |
 
-Only `accel-mag` is periodic; `fall-detected` is edge-triggered, publishing `1` on
-a detection and `0` when the alert clears. The firmware also subscribes to
+Only `accel-mag` is periodic; every other feed is edge-triggered. A fall costs 4
+points and a dismissal 2 (`fall-log` plus the existing `buzzer-command` reset), so
+the budget has room for about one incident a minute. The firmware also subscribes to
 `{user}/throttle` and `{user}/errors`, so a violation appears as a log line
 instead of silent data loss:
 
@@ -868,7 +938,8 @@ can be alerted: `RETRIGGER_COOLDOWN_MS = 6000` in `inference_main.cpp` and
 A button press stops both actuators immediately, clears the latched detection
 state, restarts the re-trigger cooldown, and pushes `V1 = 0` to Blynk. In
 `raw_stream` it also publishes `0` back to `buzzer-command` so the dashboard
-switch stops showing an active command. Verify the wiring with `[env:scanner]`,
+switch stops showing an active command, and if a fall incident is open it logs
+`DISMISSED BY USER` to `fall-log`. Verify the wiring with `[env:scanner]`,
 which prints `Button GPIO3: PRESSED` / `released` live.
 
 ### 8.9 Sensor reads fail intermittently

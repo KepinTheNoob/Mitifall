@@ -2,6 +2,10 @@
 
 #include <WiFi.h>
 
+#include <cstring>
+
+#include "esp_wifi.h"
+
 #if __has_include("secrets.h")
 #include "secrets.h"
 #endif
@@ -39,7 +43,34 @@ bool gHaveBssid = false;
 std::uint8_t gBssid[6] = {0};
 std::int32_t gChannel = 0;
 
+// Radio region. Indonesia, like most of the world outside North America, allows
+// 2.4 GHz channels 1-13, and phone hotspots frequently auto-select 12 or 13. The
+// policy is MANUAL so the setting cannot be narrowed by country info advertised
+// by some other AP.
+constexpr char kCountryCode[] = "ID";
+constexpr std::uint8_t kFirstChannel = 1;
+constexpr std::uint8_t kChannelCount = 13;
+
+// Every Nth consecutive "no AP found" (reason 201) triggers a background rescan,
+// so the log shows what the radio can hear right now instead of only at boot.
+constexpr std::uint32_t kRescanEveryNotFound = 3;
+constexpr std::uint32_t kRescanTimeoutMs = 8000;
+
+std::uint32_t gConsecutiveNotFound = 0;
+bool gRescanRunning = false;
+std::uint32_t gRescanStartedMs = 0;
+
 bool empty(const char *text) { return text == nullptr || text[0] == '\0'; }
+
+/// Same SSID ignoring case and leading/trailing whitespace - the usual reason a
+/// network that is clearly "there" never matches.
+bool nearMatch(const String &seen, const char *wanted) {
+    String a = seen;
+    String b = wanted == nullptr ? "" : wanted;
+    a.trim();
+    b.trim();
+    return a.length() > 0 && a.equalsIgnoreCase(b);
+}
 
 /// True when the configured network is open (no passphrase).
 bool isOpenNetwork() { return empty(gPassword); }
@@ -86,6 +117,27 @@ void prepareRadio() {
     // issuing begin(), which shows up as a burst of AUTH_EXPIRE (reason 2) events
     // for a single logical attempt.
     WiFi.setAutoReconnect(false);
+
+    // Channels 1-13, fixed. Must run after WiFi.mode() has started the driver.
+    wifi_country_t country = {};
+    std::strncpy(country.cc, kCountryCode, sizeof(country.cc));
+    country.schan = kFirstChannel;
+    country.nchan = kChannelCount;
+    country.policy = WIFI_COUNTRY_POLICY_MANUAL;
+    const esp_err_t countryErr = esp_wifi_set_country(&country);
+
+    // Known workaround for the ESP32-C3 SuperMini / LOLIN C3 Mini antenna layout:
+    // at full TX power these boards often fail to scan or associate. Applied here
+    // so the startup scan uses it too, not only the connection attempts.
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+
+    if (gLog != nullptr) {
+        gLog->printf("WiFi: radio country=%s ch%u-%u%s, tx power 8.5 dBm\n", kCountryCode,
+                     static_cast<unsigned>(kFirstChannel),
+                     static_cast<unsigned>(kFirstChannel + kChannelCount - 1),
+                     countryErr == ESP_OK ? "" : " (set_country FAILED)");
+    }
+
     if (gOptions.disableSleep) {
         // Modem sleep adds up to ~100 ms of latency to every publish; the power
         // saving is not worth it while streaming telemetry.
@@ -147,30 +199,104 @@ const char *disconnectReasonName(std::uint8_t reason) {
     }
 }
 
-void logVisibleNetworks(Stream &out, const char *ssid) {
-    out.printf("WiFi: scanning for \"%s\"...\n", ssid == nullptr ? "" : ssid);
-    const int found = WiFi.scanNetworks();
+/// Print every network from a completed scan and return how many match `ssid`.
+/// The full list is the point: it separates "wrong name" from "can't hear it".
+static int reportScanResults(Stream &out, const char *ssid, int found) {
     if (found <= 0) {
-        out.println("WiFi:   no networks visible at all - check the antenna/band");
-        WiFi.scanDelete();
-        return;
+        out.println("WiFi:   nothing heard at all - antenna, power supply or RF problem");
+        return 0;
     }
 
     int matches = 0;
+    int hidden = 0;
+    bool near = false;
     for (int i = 0; i < found; ++i) {
-        if (ssid != nullptr && WiFi.SSID(i) != ssid) {
-            continue;
+        const String name = WiFi.SSID(i);
+        const bool exact = ssid != nullptr && name == ssid;
+        if (name.length() == 0) {
+            ++hidden;
         }
-        ++matches;
-        out.printf("WiFi:   match ch=%d rssi=%d dBm auth=%s\n", WiFi.channel(i), WiFi.RSSI(i),
+        if (exact) {
+            ++matches;
+        } else if (nearMatch(name, ssid)) {
+            near = true;
+        }
+        out.printf("WiFi:   %s \"%s\" ch=%d rssi=%d dBm %s\n", exact ? "MATCH" : "     ",
+                   name.length() ? name.c_str() : "<hidden>", WiFi.channel(i), WiFi.RSSI(i),
                    authModeName(WiFi.encryptionType(i)));
     }
-    out.printf("WiFi:   %d network(s) visible, %d matching the configured SSID\n", found, matches);
+
+    out.printf("WiFi:   %d network(s) heard, %d matching \"%s\"", found, matches,
+               ssid == nullptr ? "" : ssid);
+    if (hidden > 0) {
+        out.printf(", %d hidden", hidden);
+    }
+    out.println();
+
+    if (matches == 0 && near) {
+        out.println("WiFi:   an SSID differs only in case or spaces - copy it into");
+        out.println("WiFi:   WIFI_SSID in include/secrets.h exactly as listed above");
+    }
+    return matches;
+}
+
+void logVisibleNetworks(Stream &out, const char *ssid) {
+    out.printf("WiFi: scanning for \"%s\" (active, all channels)...\n",
+               ssid == nullptr ? "" : ssid);
+    int matches = reportScanResults(out, ssid, WiFi.scanNetworks(false, true));
+    WiFi.scanDelete();
+
     if (matches == 0) {
-        out.println("WiFi:   the SSID is NOT in range on 2.4 GHz. The ESP32-C3 has no 5 GHz");
-        out.println("WiFi:   radio, so a 5 GHz-only AP is invisible to it.");
+        // Phone hotspots can be slow to answer probe requests; a passive scan
+        // with a long dwell listens for beacons instead.
+        out.println("WiFi: not found, retrying with a passive 500 ms/channel scan...");
+        matches = reportScanResults(out, ssid, WiFi.scanNetworks(false, true, true, 500));
+        WiFi.scanDelete();
+    }
+
+    if (matches == 0) {
+        out.println("WiFi:   still not heard. Check, in order: hotspot still on and on");
+        out.println("WiFi:   2.4 GHz; board within ~1 m of the phone; the phone lists the");
+        out.println("WiFi:   exact same name; nothing touching the chip antenna.");
+    }
+}
+
+/// Start a non-blocking rescan; update() collects the results.
+static void startBackgroundRescan() {
+    if (gRescanRunning) {
+        return;
+    }
+    if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
+        return;
+    }
+    gRescanRunning = true;
+    gRescanStartedMs = millis();
+    if (gLog != nullptr) {
+        gLog->println("WiFi: rescanning in the background to see what is audible...");
+    }
+}
+
+/// Poll the background rescan. Returns true while it is still running, so the
+/// caller holds off on new association attempts (the two would collide).
+static bool serviceBackgroundRescan() {
+    if (!gRescanRunning) {
+        return false;
+    }
+    const int16_t state = WiFi.scanComplete();
+    if (state == WIFI_SCAN_RUNNING) {
+        if (millis() - gRescanStartedMs < kRescanTimeoutMs) {
+            return true;
+        }
+        WiFi.scanDelete();
+        gRescanRunning = false;
+        return false;
+    }
+    if (gLog != nullptr) {
+        reportScanResults(*gLog, gSsid, state);
     }
     WiFi.scanDelete();
+    gRescanRunning = false;
+    return false;
 }
 
 void begin(const char *ssid, const char *password, Stream *log, const Options &options) {
@@ -237,6 +363,26 @@ void update() {
                          static_cast<unsigned long>(gAttempts), static_cast<unsigned>(reason),
                          disconnectReasonName(reason));
         }
+
+        // Repeated "no AP found": look again, in the background, so the log shows
+        // whether the AP ever becomes audible (hotspot waking up, board moved).
+        if (!connected && reason == 201) {
+            ++gConsecutiveNotFound;
+            if (gConsecutiveNotFound % kRescanEveryNotFound == 0) {
+                startBackgroundRescan();
+            }
+        } else {
+            gConsecutiveNotFound = 0;
+        }
+    }
+
+    if (connected) {
+        gConsecutiveNotFound = 0;
+    }
+
+    // A scan and an association attempt cannot run at the same time.
+    if (serviceBackgroundRescan()) {
+        return;
     }
 
     if (!connected && millis() - gLastAttemptMs >= gOptions.retryIntervalMs) {

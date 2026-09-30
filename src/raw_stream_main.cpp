@@ -14,10 +14,16 @@
 //  Cloud: Adafruit IO over plain MQTT (PubSubClient)
 //    publish   {user}/feeds/accel-mag        mean |a| over the window   -> chart
 //    publish   {user}/feeds/fall-detected    1 on detection, 0 on clear -> LED
+//    publish   {user}/feeds/fall-tilt        posture change on a fall   -> gauge
+//    publish   {user}/feeds/fall-log         timestamped incident text  -> stream
+//    publish   {user}/feeds/device-status    ONLINE on connect, LWT     -> text
 //    subscribe {user}/feeds/buzzer-command   dashboard toggle           -> buzzer
 //
+//  Only accel-mag is periodic; everything else is published on an event.
+//
 //  Sampling is the priority: WiFi and MQTT work is only ever done between
-//  samples, and the network never gates acquisition or CSV output.
+//  samples, and the network never gates acquisition or CSV output. Events raised
+//  on the sampling path are queued and sent in the gap between samples.
 // =============================================================================
 
 #include <Arduino.h>
@@ -25,6 +31,8 @@
 #include <WiFi.h>
 
 #include <cmath>
+#include <cstring>
+#include <ctime>
 
 #include "adafruit_io_config.h"
 #include "alarm_manager.h"
@@ -84,8 +92,35 @@ std::uint32_t gPublishCount = 0;
 std::uint32_t gFallCount = 0;
 bool gFallDetectedPublished = false;
 
+// An incident opens on FALL DETECTED and closes when the wearer presses the
+// GPIO3 button. The alert itself is only 0.5 s, so tying the dismissal to the
+// actuators still running would almost never log one.
+bool gIncidentOpen = false;
+
+// device-status Last Will. Cleared if the broker refuses a CONNECT carrying it.
+bool gWillEnabled = true;
+std::uint8_t gWillFailures = 0;
+
+bool gTimeSyncStarted = false;
+
 // kEnableCloud AND credentials actually present in secrets.h.
 bool gCloudActive = false;
+
+// ---------------------------------------------------------------------------
+// Event queue for the edge-triggered feeds (fall-tilt, fall-log)
+// ---------------------------------------------------------------------------
+// Filled on the sampling path or while MQTT is down, drained between samples.
+// Payloads are formatted when the event happens, so a delayed delivery still
+// carries the correct time.
+struct PendingEvent {
+    const char *topic;  // one of the AIO_FEED_* string literals
+    char payload[64];
+};
+
+PendingEvent gEventQueue[kEventQueueCapacity];
+std::size_t gEventHead = 0;
+std::size_t gEventCount = 0;
+std::uint32_t gEventsDropped = 0;
 
 // ---------------------------------------------------------------------------
 // Rolling |a| statistics for the publish window (Welford, single pass)
@@ -114,6 +149,75 @@ struct MagnitudeStats {
 };
 
 MagnitudeStats gWindow;
+
+// ---------------------------------------------------------------------------
+// Timestamps and event publishing
+// ---------------------------------------------------------------------------
+
+/// "2026-09-30 14:03:12 WIB" once SNTP has set the clock, "uptime 00:12:34"
+/// before that. Never blocks.
+void formatTimestamp(char *out, std::size_t size) {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+    localtime_r(&now, &local);
+    if (local.tm_year > (2020 - 1900)) {
+        std::strftime(out, size, "%Y-%m-%d %H:%M:%S %Z", &local);
+        return;
+    }
+    const unsigned long up = millis() / 1000UL;
+    snprintf(out, size, "uptime %02lu:%02lu:%02lu", up / 3600UL, (up / 60UL) % 60UL, up % 60UL);
+}
+
+/// Queue a payload for `topic`. Drained by flushEvents() between samples.
+void queueEvent(const char *topic, const char *payload) {
+    if (gEventCount == kEventQueueCapacity) {
+        // Full: drop the oldest so the most recent incident is never lost.
+        gEventHead = (gEventHead + 1) % kEventQueueCapacity;
+        --gEventCount;
+        ++gEventsDropped;
+    }
+    PendingEvent &slot = gEventQueue[(gEventHead + gEventCount) % kEventQueueCapacity];
+    slot.topic = topic;
+    snprintf(slot.payload, sizeof(slot.payload), "%s", payload);
+    ++gEventCount;
+
+    if (kPrintBanner) {
+        Serial.printf("# event queued -> %s: %s%s\n", topic, payload,
+                      gMqtt.connected() ? "" : " (MQTT down, will send on reconnect)");
+    }
+}
+
+/// Publish queued events in order. Stops at the first failure and retries later.
+void flushEvents() {
+    while (gEventCount > 0 && gMqtt.connected()) {
+        const PendingEvent &next = gEventQueue[gEventHead];
+        if (!gMqtt.publish(next.topic, next.payload)) {
+            return;
+        }
+        ++gPublishCount;
+        if (kPrintBanner) {
+            Serial.printf("# event sent   -> %s: %s\n", next.topic, next.payload);
+        }
+        gEventHead = (gEventHead + 1) % kEventQueueCapacity;
+        --gEventCount;
+    }
+}
+
+/// Timestamped incident line for the fall-log feed.
+void logIncident(const char *what) {
+    char stamp[32];
+    formatTimestamp(stamp, sizeof(stamp));
+    char line[64];
+    snprintf(line, sizeof(line), "[%s] %s", stamp, what);
+    queueEvent(AIO_FEED_FALL_LOG, line);
+}
+
+/// Posture change measured by cascade stage 3 for a confirmed fall.
+void reportFallTilt(float tiltDeg) {
+    char value[16];
+    snprintf(value, sizeof(value), "%.1f", tiltDeg);
+    queueEvent(AIO_FEED_FALL_TILT, value);
+}
 
 // ---------------------------------------------------------------------------
 // MQTT
@@ -173,18 +277,52 @@ bool serviceMqtt() {
         Serial.printf("# mqtt connecting to %s:%d as %s\n", AIO_SERVER, AIO_PORT, clientId);
     }
 
-    if (!gMqtt.connect(clientId, AIO_USERNAME, AIO_KEY)) {
+    // Register the device-status Last Will on every CONNECT. After repeated
+    // failures with it, try one CONNECT without it, so a broker that refuses
+    // wills can never take MQTT down entirely.
+    const bool probeWithoutWill = gWillEnabled && gWillFailures >= kWillFailuresBeforeFallback;
+    const bool useWill = gWillEnabled && !probeWithoutWill;
+
+    const bool connected =
+        useWill ? gMqtt.connect(clientId, AIO_USERNAME, AIO_KEY, AIO_FEED_DEVICE_STATUS, kWillQos,
+                                kWillRetain, kStatusOffline)
+                : gMqtt.connect(clientId, AIO_USERNAME, AIO_KEY);
+
+    if (!connected) {
+        if (probeWithoutWill) {
+            gWillFailures = 0;  // plain CONNECT failed too: not the will's fault
+        } else if (useWill) {
+            ++gWillFailures;
+        }
         Serial.printf("# mqtt connect failed, state=%d (retry in %lu ms)\n", gMqtt.state(),
                       static_cast<unsigned long>(kMqttRetryIntervalMs));
         return false;
+    }
+
+    if (probeWithoutWill) {
+        gWillEnabled = false;
+        Serial.println("# mqtt: broker rejected the Last Will; connected without it");
+    }
+    gWillFailures = 0;
+
+    // Announce ourselves. Retained, and the only publish this feed ever gets
+    // from the device - there is no periodic heartbeat on it.
+    if (gMqtt.publish(AIO_FEED_DEVICE_STATUS, kStatusOnline, true)) {
+        ++gPublishCount;
     }
 
     gMqtt.subscribe(AIO_FEED_BUZZER_COMMAND);
     gMqtt.subscribe(AIO_TOPIC_THROTTLE);
     gMqtt.subscribe(AIO_TOPIC_ERRORS);
     if (kPrintBanner) {
-        Serial.println("# mqtt connected, subscribed to buzzer-command / throttle / errors");
+        Serial.printf("# mqtt connected (LWT %s), %s = %s\n",
+                      useWill ? "registered" : "not registered", AIO_FEED_DEVICE_STATUS,
+                      kStatusOnline);
+        Serial.println("# subscribed to buzzer-command / throttle / errors");
     }
+
+    // Anything that happened while we were offline goes out now.
+    flushEvents();
     return true;
 }
 
@@ -330,6 +468,13 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
             AlarmManager::trigger();
             gFallDetectedPublished = true;
             publishFallDetected(1);
+
+            // Stage 3 passed, so lastOrientationChangeDeg() is the tilt that
+            // cleared orientationChangeDeg. Queued, sent once, between samples.
+            reportFallTilt(gDetector.lastOrientationChangeDeg());
+            logIncident("FALL DETECTED");
+            gIncidentOpen = true;
+
             Serial.printf("*** FALL DETECTED (rule-based) #%lu  |a|max=%.2fg  std=%.3fg  "
                           "tilt=%.0fdeg  |w|peak=%.0fdps  detect=%luus ***\n",
                           static_cast<unsigned long>(gFallCount), gDetector.lastImpactG(),
@@ -413,6 +558,10 @@ void setup() {
                           static_cast<unsigned long>(kPublishIntervalMs));
             Serial.printf("# publishing %s on detection (1) and on clear (0)\n",
                           AIO_FEED_FALL_DETECTED);
+            Serial.printf("# publishing %s once per fall (tilt, deg)\n", AIO_FEED_FALL_TILT);
+            Serial.printf("# publishing %s on fall and on dismissal\n", AIO_FEED_FALL_LOG);
+            Serial.printf("# publishing %s = %s on connect, LWT %s\n", AIO_FEED_DEVICE_STATUS,
+                          kStatusOnline, kStatusOffline);
             Serial.printf("# subscribed to %s\n", AIO_FEED_BUZZER_COMMAND);
         }
     }
@@ -437,6 +586,15 @@ void loop() {
         if (gFallDetectedPublished) {
             publishFallDetected(0);
             gFallDetectedPublished = false;
+        }
+
+        // The debounced GPIO3 press is consumed here rather than in the ISR or
+        // inside AlarmManager: MQTT is not safe from interrupt context, and the
+        // alarm module is shared by all environments and stays network-free.
+        // Only a press that closes an open incident is a dismissal.
+        if (gIncidentOpen) {
+            logIncident("DISMISSED BY USER");
+            gIncidentOpen = false;
         }
     }
 
@@ -496,13 +654,27 @@ void loop() {
 
     WifiLink::update();
     serviceMqtt();
+    flushEvents();
 
     if (now - gLastPublishMs >= kPublishIntervalMs) {
         gLastPublishMs = now;
         publishWindow();
     }
 
-    if (kPrintBanner && WifiLink::consumeJustConnected()) {
+    const bool justConnected = WifiLink::consumeJustConnected();
+
+    // Start SNTP once, after the first association: it needs a live network
+    // stack, and it runs in the background so it never blocks the loop.
+    if (justConnected && !gTimeSyncStarted) {
+        configTzTime(kTimezonePosix, kNtpServer1, kNtpServer2);
+        gTimeSyncStarted = true;
+        if (kPrintBanner) {
+            Serial.printf("# time: SNTP started (%s), fall-log uses uptime until synced\n",
+                          kTimezonePosix);
+        }
+    }
+
+    if (kPrintBanner && justConnected) {
         Serial.printf("# wifi ip=%s rssi=%ld publishes=%lu missed_reads=%lu\n",
                       WifiLink::ipAddress().c_str(), static_cast<long>(WifiLink::rssi()),
                       static_cast<unsigned long>(gPublishCount),

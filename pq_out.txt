@@ -1,0 +1,31 @@
+sliding window
+  [PASS] 29 publishes counted inside the window
+  [PASS] 30th event refused while the window is full
+  [PASS] oldest entry ages out after exactly 60 s
+  [PASS] event allowed once a slot frees
+  [PASS] all entries aged out after 61 s
+
+telemetry yields to events
+  [PASS] 24 used: telemetry still allowed
+  [PASS] 25 used: telemetry blocked (4 kept for events)
+  [PASS] 25 used: events still allowed
+
+worst case: one dismissed fall on top of full telemetry
+    max publishes in any 60 s window = 29, telemetry skipped = 5
+  [PASS] never exceeds 29 per rolling minute
+  [PASS] every event was eventually delivered
+
+burst of repeated falls cannot break the limit
+    max publishes in any 60 s window = 29
+  [PASS] limit held under a sustained fall burst
+  [PASS] backlog drained after the burst
+
+outbox
+  [PASS] fills to capacity
+  [PASS] overflow reports a drop
+  [PASS] oldest ('a') was the one dropped
+  [PASS] FIFO order preserved
+  [PASS] long payload truncated safely to 63 chars
+
+ALL PUBLISH-QUEUE TESTS PASSED
+exit=0
