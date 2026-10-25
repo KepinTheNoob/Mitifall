@@ -44,6 +44,8 @@ void reportExpectations(const I2cDiagnostics::ScanResult &scan) {
     Serial.printf("  HMC5883L (0x1E)      : %s\n", hmc ? "FOUND" : "missing");
     Serial.printf("  QMC5883L (0x0D)      : %s\n", qmcL ? "FOUND" : "missing");
     Serial.printf("  QMC5883P (0x2C)      : %s\n", qmcP ? "FOUND" : "missing");
+    const bool baro = scan.contains(kBmp280Addr) || scan.contains(0x77);
+    Serial.printf("  BMP280   (0x76/0x77) : %s\n", baro ? "FOUND" : "missing");
 
     if (magCount == 0) {
         Serial.println("  -> no magnetometer: only the 6-DoF (acc_gyro) model can run");

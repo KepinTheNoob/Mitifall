@@ -54,6 +54,7 @@ enum class MagKind : std::uint8_t { None, Hmc5883L, Qmc5883L, Qmc5883P };
 struct Status {
     bool imuReady = false;
     bool magReady = false;
+    bool baroReady = false;  ///< HW-611 (BMP280) answered
     std::uint8_t imuAddress = 0;
     MagKind magKind = MagKind::None;
     int sdaPin = -1;
@@ -74,5 +75,10 @@ const Status &status();
 bool read(Sample9 &sample);
 
 const char *magKindName(MagKind kind);
+
+/// Read the HW-611 barometer (BMP280). Pressure in Pa, temperature in deg C.
+/// Returns false when no barometer was found or the read failed. Kept out of
+/// Sample9 on purpose: the ML features are built from exactly nine axes.
+bool readBaro(float &pressurePa, float &temperatureC);
 
 }  // namespace SensorHub

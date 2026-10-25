@@ -12,6 +12,9 @@ constexpr float kRadToDeg = 57.2957795131f;
 // two of ordinary activity.
 constexpr float kReferenceTauMs = 1500.0f;
 
+// Time constant of the pre-impact pressure reference (HW-611 barometer).
+constexpr float kPressureTauMs = 2000.0f;
+
 inline float magnitude3(float x, float y, float z) { return std::sqrt(x * x + y * y + z * z); }
 
 /// Angle between two vectors, in degrees. Returns 0 if either is degenerate.
@@ -52,6 +55,8 @@ const char *Detector::rejectionName(Rejection rejection) {
             return "no orientation change or angular spike";
         case Rejection::Timeout:
             return "impact not confirmed in time";
+        case Rejection::NoHeightDrop:
+            return "no height drop (barometer)";
         default:
             return "none";
     }
@@ -68,6 +73,8 @@ void Detector::reset() {
     stillMean_ = 0.0f;
     stillM2_ = 0.0f;
     lastRejection_ = Rejection::None;
+    refPressureValid_ = false;
+    lastPressureRisePa_ = 0.0f;
 }
 
 void Detector::enterIdle() {
@@ -84,6 +91,8 @@ void Detector::beginAssessment(std::uint32_t timestampMs) {
     stillMean_ = 0.0f;
     stillM2_ = 0.0f;
     postX_ = postY_ = postZ_ = 0.0f;
+    postPressureDiffSum_ = 0.0f;
+    postPressureCount_ = 0;
 }
 
 Event Detector::finishAssessment() {
@@ -94,6 +103,10 @@ Event Detector::finishAssessment() {
     const float inv = stillCount_ > 0 ? 1.0f / static_cast<float>(stillCount_) : 0.0f;
     const float px = postX_ * inv, py = postY_ * inv, pz = postZ_ * inv;
     lastTiltDeg_ = refValid_ ? angleBetweenDeg(refX_, refY_, refZ_, px, py, pz) : 0.0f;
+
+    const bool haveBaro = refPressureValid_ && postPressureCount_ > 0;
+    lastPressureRisePa_ =
+        haveBaro ? postPressureDiffSum_ / static_cast<float>(postPressureCount_) : 0.0f;
 
     const bool still = lastStillStdG_ <= config_.stillStdG;
     const bool tilted = lastTiltDeg_ >= config_.orientationChangeDeg;
@@ -115,6 +128,13 @@ Event Detector::finishAssessment() {
         return Event::Rejected;
     }
 
+    if (config_.requireHeightDrop && haveBaro &&
+        lastPressureRisePa_ < config_.minPressureRisePa) {
+        lastRejection_ = Rejection::NoHeightDrop;
+        enterIdle();
+        return Event::Rejected;
+    }
+
     lastRejection_ = Rejection::None;
     ++fallCount_;
     state_ = State::Cooldown;
@@ -123,7 +143,7 @@ Event Detector::finishAssessment() {
 }
 
 Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, float gx,
-                       float gy, float gz) {
+                       float gy, float gz, float pressurePa) {
     const float accelMag = magnitude3(ax, ay, az);
     const float gyroMag = magnitude3(gx, gy, gz);
 
@@ -152,6 +172,18 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
                 refX_ += alpha * (ax - refX_);
                 refY_ += alpha * (ay - refY_);
                 refZ_ += alpha * (az - refZ_);
+            }
+
+            // Same idea for the barometer: a slow pre-impact pressure reference.
+            if (pressurePa > 0.0f) {
+                if (!refPressureValid_) {
+                    refPressure_ = pressurePa;
+                    refPressureValid_ = true;
+                } else if (dt > 0) {
+                    float beta = static_cast<float>(dt) / kPressureTauMs;
+                    if (beta > 1.0f) beta = 1.0f;
+                    refPressure_ += beta * (pressurePa - refPressure_);
+                }
             }
 
             if (accelMag >= config_.impactG) {
@@ -223,6 +255,10 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
             postX_ += ax;
             postY_ += ay;
             postZ_ += az;
+            if (pressurePa > 0.0f && refPressureValid_) {
+                postPressureDiffSum_ += pressurePa - refPressure_;
+                ++postPressureCount_;
+            }
 
             if (timestampMs - stateEnteredMs_ >= config_.stillnessWindowMs) {
                 return finishAssessment();

@@ -33,6 +33,9 @@ constexpr std::uint8_t kHmc5883Addr = 0x1E;   // genuine Honeywell HMC5883L
 constexpr std::uint8_t kQmc5883lAddr = 0x0D;  // QST QMC5883L clone
 constexpr std::uint8_t kQmc5883pAddr = 0x2C;  // QST QMC5883P, the current part
 
+// HW-611 barometer (BMP280). SDO tied to GND -> 0x76; SDO to 3V3 -> 0x77.
+constexpr std::uint8_t kBmp280Addr = 0x76;
+
 // ---------------------------------------------------------------------------
 // Actuators
 // ---------------------------------------------------------------------------

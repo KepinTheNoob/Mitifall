@@ -21,6 +21,7 @@ enum class DeviceKind : std::uint8_t {
     Hmc5883L,       ///< genuine Honeywell, ID regs spell "H43"
     Qmc5883L,       ///< QST QMC5883L clone at 0x0D
     Qmc5883P,       ///< QST QMC5883P at 0x2C, chip ID 0x80
+    Bmp280,         ///< HW-611 barometer at 0x76/0x77, chip ID 0x58
 };
 
 const char *deviceKindName(DeviceKind kind);

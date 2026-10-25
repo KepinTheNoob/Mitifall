@@ -1,5 +1,6 @@
 #include "sensor_hub.h"
 
+#include <Adafruit_BMP280.h>
 #include <Adafruit_HMC5883_U.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
@@ -13,6 +14,7 @@ using namespace BoardConfig;
 
 Adafruit_MPU6050 gMpu;
 Adafruit_HMC5883_Unified gHmc(12345);
+Adafruit_BMP280 gBmp(&Wire);  // HW-611
 Status gStatus;
 
 // --------------------------------------------------------------------------
@@ -226,6 +228,23 @@ bool beginMag(Stream &log) {
     return false;
 }
 
+// --------------------------------------------------------------------------
+// HW-611 barometer (BMP280)
+// --------------------------------------------------------------------------
+bool beginBaro(Stream &log) {
+    if (!gBmp.begin(kBmp280Addr)) {
+        log.printf("  BMP280 (HW-611) NOT found at 0x%02X\n", kBmp280Addr);
+        return false;
+    }
+    // Bosch "indoor navigation" profile: ~26 Hz output, ~0.2 Pa (~2 cm) noise.
+    gBmp.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2,
+                     Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X16,
+                     Adafruit_BMP280::STANDBY_MS_1);
+    gStatus.baroReady = true;
+    log.printf("  BMP280 (HW-611) ready at 0x%02X\n", kBmp280Addr);
+    return true;
+}
+
 }  // namespace
 
 const char *magKindName(MagKind kind) {
@@ -268,10 +287,20 @@ Status begin(Stream &log, bool autoDetectPins) {
 
     beginImu(log);
     beginMag(log);
+    beginBaro(log);
     return gStatus;
 }
 
 const Status &status() { return gStatus; }
+
+bool readBaro(float &pressurePa, float &temperatureC) {
+    if (!gStatus.baroReady) {
+        return false;
+    }
+    temperatureC = gBmp.readTemperature();
+    pressurePa = gBmp.readPressure();
+    return pressurePa > 0.0f;  // the library returns 0 or NAN on a failed read
+}
 
 bool read(Sample9 &sample) {
     sample.timestampMs = millis();

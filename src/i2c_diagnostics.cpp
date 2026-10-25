@@ -23,6 +23,10 @@ constexpr std::uint8_t kQmcLChipId = 0xFF;
 constexpr std::uint8_t kRegQmcPChipId = 0x00;
 constexpr std::uint8_t kQmcPChipId = 0x80;
 
+// BMP280 (HW-611): chip ID at register 0xD0 reads 0x58 (a BME280 would read 0x60).
+constexpr std::uint8_t kRegBmpChipId = 0xD0;
+constexpr std::uint8_t kBmp280ChipId = 0x58;
+
 bool isMpuVariant(std::uint8_t whoAmI) {
     // MPU6500 = 0x70, MPU9250 = 0x71, MPU9255 = 0x73, MPU6555 = 0x7C.
     return whoAmI == 0x70 || whoAmI == 0x71 || whoAmI == 0x73 || whoAmI == 0x7C;
@@ -42,6 +46,8 @@ const char *deviceKindName(DeviceKind kind) {
             return "QMC5883L (QST clone)";
         case DeviceKind::Qmc5883P:
             return "QMC5883P (QST)";
+        case DeviceKind::Bmp280:
+            return "BMP280 (HW-611)";
         default:
             return "unknown device";
     }
@@ -116,6 +122,13 @@ DeviceKind identify(TwoWire &bus, std::uint8_t address, std::uint8_t &idByte) {
     if (address == BoardConfig::kQmc5883pAddr) {
         if (readRegister(bus, address, kRegQmcPChipId, idByte) && idByte == kQmcPChipId) {
             return DeviceKind::Qmc5883P;
+        }
+        return DeviceKind::Unknown;
+    }
+
+    if (address == BoardConfig::kBmp280Addr || address == 0x77) {
+        if (readRegister(bus, address, kRegBmpChipId, idByte) && idByte == kBmp280ChipId) {
+            return DeviceKind::Bmp280;
         }
         return DeviceKind::Unknown;
     }

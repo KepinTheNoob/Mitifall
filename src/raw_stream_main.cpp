@@ -78,6 +78,9 @@ std::uint32_t gRejectCount = 0;
 float gPeakAccelG = 0.0f;   // since the last status line
 float gSessionPeakG = 0.0f;  // since boot
 
+// HW-611 (BMP280): latest pressure handed to the detector, -1 = no barometer.
+float gPressurePa = -1.0f;
+
 WiFiClient gTcp;
 PubSubClient gMqtt(gTcp);
 
@@ -436,7 +439,7 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
     const ThresholdDetector::Event event =
         gDetector.update(sample.timestampMs, sample.v[SensorHub::kAx], sample.v[SensorHub::kAy],
                          sample.v[SensorHub::kAz], sample.v[SensorHub::kGx],
-                         sample.v[SensorHub::kGy], sample.v[SensorHub::kGz]);
+                         sample.v[SensorHub::kGy], sample.v[SensorHub::kGz], gPressurePa);
     const std::uint32_t elapsed = micros() - started;
 
     switch (event) {
@@ -458,6 +461,9 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
                               gDetector.lastImpactG(), gDetector.lastStillStdG(),
                               gDetector.lastOrientationChangeDeg(),
                               gDetector.lastGyroPeakDps());
+                if (SensorHub::status().baroReady) {
+                    Serial.printf("#   barometer dP=%.1f Pa\n", gDetector.lastPressureRisePa());
+                }
             }
             break;
 
@@ -472,7 +478,15 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
             // Stage 3 passed, so lastOrientationChangeDeg() is the tilt that
             // cleared orientationChangeDeg. Queued, sent once, between samples.
             reportFallTilt(gDetector.lastOrientationChangeDeg());
-            logIncident("FALL DETECTED");
+                        if (SensorHub::status().baroReady) {
+                // HW-611: ~12 Pa per meter turun, ikut terkirim di baris fall-log.
+                char what[40];
+                snprintf(what, sizeof(what), "FALL DETECTED (turun ~%.1f m)",
+                         gDetector.lastPressureRisePa() / 12.0f);
+                logIncident(what);
+            } else {
+                logIncident("FALL DETECTED");
+            }
             gIncidentOpen = true;
 
             Serial.printf("*** FALL DETECTED (rule-based) #%lu  |a|max=%.2fg  std=%.3fg  "
@@ -480,6 +494,9 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
                           static_cast<unsigned long>(gFallCount), gDetector.lastImpactG(),
                           gDetector.lastStillStdG(), gDetector.lastOrientationChangeDeg(),
                           gDetector.lastGyroPeakDps(), static_cast<unsigned long>(elapsed));
+            if (SensorHub::status().baroReady) {
+                Serial.printf("#   barometer dP=%.1f Pa\n", gDetector.lastPressureRisePa());
+            }
             break;
         }
 
@@ -517,6 +534,7 @@ void setup() {
     }
     if (kPrintBanner) {
         Serial.printf("# magnetometer: %s\n", SensorHub::magKindName(status.magKind));
+        Serial.printf("# barometer: %s\n", status.baroReady ? "BMP280 (HW-611)" : "none");
     }
 
     if (kEnableFallDetection) {
@@ -620,6 +638,14 @@ void loop() {
         SensorHub::Sample9 sample;
         if (SensorHub::read(sample)) {
             ++gSampleCount;
+
+            // HW-611: fresh pressure for the detector, printed once per second.
+            float tempC = 0.0f;
+            if (!SensorHub::readBaro(gPressurePa, tempC)) {
+                gPressurePa = -1.0f;
+            } else if (kPrintBanner && gSampleCount % kSampleRateHz == 0) {
+                Serial.printf("# baro p=%.1f Pa  T=%.1f C\n", gPressurePa, tempC);
+            }
 
             const float ax = sample.v[SensorHub::kAx];
             const float ay = sample.v[SensorHub::kAy];

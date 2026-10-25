@@ -24,9 +24,9 @@ namespace AlarmManager {
 /// e.g. `{pulseOnMs = 180, pulseOffMs = 120, durationMs = 4000}` gives ~13 beeps
 /// over four seconds.
 struct Pattern {
-    std::uint32_t pulseOnMs = 500;   ///< actuators energised
-    std::uint32_t pulseOffMs = 0;    ///< gap between pulses (0 = no repeat)
-    std::uint32_t durationMs = 500;  ///< total alert length
+    std::uint32_t pulseOnMs = 300;   ///< actuators energised
+    std::uint32_t pulseOffMs = 200;    ///< gap between pulses (0 = no repeat)
+    std::uint32_t durationMs = 60000;  ///< total alert length
     bool useBuzzer = true;
     bool useVibration = true;
 };

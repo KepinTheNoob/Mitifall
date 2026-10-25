@@ -65,6 +65,14 @@ struct Config {
     /// affect the decision, so there is no point tuning it.
     float gyroPeakDps = 90.0f;
 
+    // --- optional barometer (HW-611 / BMP280) ---
+    /// Pressure must RISE by at least this much after the impact (the wrist ended
+    /// up lower). Near sea level 1 m of height is ~12 Pa, so 6 Pa ~ 0.5 m.
+    float minPressureRisePa = 6.0f;
+    /// false = only measure and log the rise; true = also reject impacts whose
+    /// rise is below minPressureRisePa. Measure real falls first, then enable.
+    bool requireHeightDrop = false;
+
     // --- housekeeping ---
     std::uint32_t cooldownMs = 5000;    ///< suppress re-triggering after a fall
     std::uint32_t impactTimeoutMs = 3500;  ///< give up on an unconfirmed impact
@@ -88,7 +96,7 @@ enum class Event : std::uint8_t {
 };
 
 /// Why an impact was rejected, for tuning and serial diagnostics.
-enum class Rejection : std::uint8_t { None, NotStill, NoOrientationChange, Timeout };
+enum class Rejection : std::uint8_t { None, NotStill, NoOrientationChange, Timeout, NoHeightDrop };
 
 class Detector {
    public:
@@ -98,9 +106,9 @@ class Detector {
 
     /// Feed one sample. Accelerations in g, angular rates in deg/s, timestamp in
     /// milliseconds. Call at the acquisition rate; returns an Event when the
-    /// state machine reaches a decision.
+    /// state machine reaches a decision. pressurePa <= 0 means "no barometer".
     Event update(std::uint32_t timestampMs, float ax, float ay, float az, float gx, float gy,
-                 float gz);
+                 float gz, float pressurePa = -1.0f);
 
     State state() const { return state_; }
     Config &config() { return config_; }
@@ -111,6 +119,7 @@ class Detector {
     float lastGyroPeakDps() const { return lastGyroPeakDps_; }
     float lastStillStdG() const { return lastStillStdG_; }
     float lastOrientationChangeDeg() const { return lastTiltDeg_; }
+    float lastPressureRisePa() const { return lastPressureRisePa_; }
     Rejection lastRejection() const { return lastRejection_; }
     std::uint32_t fallCount() const { return fallCount_; }
 
@@ -140,6 +149,14 @@ class Detector {
     float stillMean_ = 0.0f;
     float stillM2_ = 0.0f;
     float postX_ = 0.0f, postY_ = 0.0f, postZ_ = 0.0f;
+
+    // Barometer: pre-impact reference and post-impact accumulator (stored as the
+    // difference from the reference so float precision stays fine).
+    float refPressure_ = 0.0f;
+    bool refPressureValid_ = false;
+    float postPressureDiffSum_ = 0.0f;
+    std::uint32_t postPressureCount_ = 0;
+    float lastPressureRisePa_ = 0.0f;
 
     float lastImpactG_ = 0.0f;
     float lastGyroPeakDps_ = 0.0f;
