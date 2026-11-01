@@ -1,0 +1,17 @@
+baseline,metric,delta_mean,ci_low,ci_high,verdict
+ml_inference RF @ 0.30 (deployed),accuracy,0.01956147677954794,-0.012984548471798132,0.04575650207222709,no clear difference
+ml_inference RF @ 0.30 (deployed),f1_macro,0.01689206768991508,-0.020416816478295574,0.0463186907079778,no clear difference
+ml_inference RF @ 0.30 (deployed),f1_fall,0.017021756399152016,-0.035487754514584434,0.05790181332414495,no clear difference
+ml_inference RF @ 0.30 (deployed),sensitivity,-0.0362024555728703,-0.10405769135050905,0.021611384354966953,no clear difference
+ml_inference RF @ 0.30 (deployed),specificity,0.04060119538376089,-0.0022724166856469856,0.07291625743069713,no clear difference
+ml_inference RF @ 0.30 (deployed),roc_auc,0.020029721862422613,-0.004880133344574924,0.0397149143013871,no clear difference
+ml_inference RF @ 0.30 (deployed),pr_auc,0.0074187640371254325,-0.03446327060824505,0.04095128254314959,no clear difference
+ml_inference RF @ 0.30 (deployed),soft_fall_sensitivity,-0.06818897812886512,-0.16197658926532166,0.023446800595238047,no clear difference
+ml_inference RF @ val-tuned,accuracy,-0.015633351471218627,-0.04756699226331212,0.009180163397702345,no clear difference
+ml_inference RF @ val-tuned,f1_macro,-0.014364976740450923,-0.05328515724495479,0.014930103045585584,no clear difference
+ml_inference RF @ val-tuned,f1_fall,-0.015952889896389055,-0.07209962938736676,0.024442504463761207,no clear difference
+ml_inference RF @ val-tuned,sensitivity,0.022917334429902392,-0.04501849479002973,0.0791343769820677,no clear difference
+ml_inference RF @ val-tuned,specificity,-0.030148878315301084,-0.06657973542651627,-0.0024975480208038235,RF higher
+ml_inference RF @ val-tuned,roc_auc,0.020029721862422613,-0.004880133344574924,0.0397149143013871,no clear difference
+ml_inference RF @ val-tuned,pr_auc,0.0074187640371254325,-0.03446327060824505,0.04095128254314959,no clear difference
+ml_inference RF @ val-tuned,soft_fall_sensitivity,0.07152796760702297,-0.04122464503042592,0.17105263157894735,no clear difference

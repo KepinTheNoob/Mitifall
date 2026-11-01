@@ -1,0 +1,11 @@
+model,family,train,inputs,latency,device,size,storage,work
+RF-53,ML,2.1 s,53 features (acc + gyro + mag),C++ firmware code: 2.1 us features + 0.7 us forest; sklearn 15.5 us (batched),yes: [env:ml_inference],"60 trees, 20,964 nodes (flashed: 23,634)",184 (flashed: 208),~560 comparisons + 53 features
+RF-38,ML,1.9 s,38 features (acc + gyro),sklearn 15.0 us (batched),possible: export_model.py --axes acc_gyro,"60 trees, 21,928 nodes",193,~561 comparisons + 38 features
+RF-19,ML,1.3 s,19 features (acc),sklearn 13.3 us (batched),not exported,"60 trees, 24,192 nodes",213,~553 comparisons + 19 features
+SVM-RBF,ML,1.5 s,53 features (acc + gyro + mag),sklearn 133.1 us (batched),not exported,"2,057 support vectors",434,"~109 k MACs + 2,057 exp"
+Linear SVM,ML,4.0 s,53 features (acc + gyro + mag),sklearn 101.5 us (batched),not exported,"54 weights (from 3,713 support vectors)",0.2,53 MACs
+LogReg,ML,0.2 s,53 features (acc + gyro + mag),sklearn 3.4 us (batched),not exported,54 weights,0.2,53 MACs
+CNN-BiLSTM,DL,75.4 s,raw window 3 x 100 (acc),"PyTorch 0.40 ms (batch 1), 80 us (batched)",no: ONNX for a gateway / server,"40,706 parameters",159,1.21 M MACs
+CNN-BiLSTM x3,DL,4.5 min,raw window 3 x 100 (acc),"PyTorch 1.30 ms (batch 1), 190 us (batched)",no: ONNX for a gateway / server,"122,118 parameters",477,3.64 M MACs
+CNN-BiLSTM +gyro,DL,96.8 s,raw window 6 x 100 (acc + gyro),"PyTorch 0.42 ms (batch 1), 72 us (batched); ONNX Runtime 0.10 ms",no: ONNX for a gateway / server,"41,346 parameters","162 (ONNX 247, INT8 131)",1.28 M MACs
+TCN,DL,2.1 min,raw window 3 x 100 (acc),"PyTorch 0.71 ms (batch 1), 210 us (batched)",no: ONNX for a gateway / server,"37,602 parameters",147,1.94 M MACs

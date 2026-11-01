@@ -1,23 +1,3 @@
-"""Model benchmarking under Leave-One-Subject-Out cross-validation.
-
-Why LOSO: windows from a single recording are highly correlated, and windows
-from the same subject share gait/posture signatures. A random split would leak
-subject identity into the test set and inflate every metric. ``LeaveOneGroupOut``
-grouped on ``subject_id`` gives one fold per subject, so every score is measured
-on a person the model has never seen.
-
-Metric semantics for fall detection:
-  * sensitivity / recall = TP / (TP + FN)  -> falls actually caught
-  * specificity          = TN / (TN + FP)  -> false-alarm behaviour
-Both are reported per fold, pooled over all folds, and averaged across folds.
-
-Six of the 19 UMAFall subjects contributed no Fall recordings, so their folds
-contain no positives and sensitivity is mathematically undefined there. Those
-folds report NaN instead of a misleading 0.0, fold averages are NaN-aware, and
-the pooled confusion matrix (which is immune to the issue) is treated as the
-headline number.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -38,7 +18,7 @@ from sklearn.svm import SVC
 try:
     from . import config
     from .feature_extraction import FEATURE_NAMES, load_feature_table
-except ImportError:  # pragma: no cover - direct script execution
+except ImportError:
     import config
     from feature_extraction import FEATURE_NAMES, load_feature_table
 
@@ -51,21 +31,9 @@ METRIC_COLUMNS = (
     "balanced_accuracy",
 )
 
-
-# --------------------------------------------------------------------------- #
-# Models
-# --------------------------------------------------------------------------- #
-
-
 def build_models(
     names: tuple[str, ...] = config.MODEL_NAMES, n_jobs: int = -1
 ) -> dict[str, Pipeline]:
-    """Instantiate the benchmark models.
-
-    Trees are scale-invariant, so the forest skips standardisation; the SVMs and
-    the logistic model are fitted inside a ``Pipeline`` with ``StandardScaler``
-    so the scaler is re-fitted on training folds only (no leakage).
-    """
     factories: dict[str, callable] = {
         "random_forest": lambda: Pipeline(
             [
@@ -108,14 +76,7 @@ def build_models(
 
     return {name: factories[name]() for name in names}
 
-
-# --------------------------------------------------------------------------- #
-# Metrics
-# --------------------------------------------------------------------------- #
-
-
 def confusion_counts(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, int]:
-    """2x2 counts, explicit about labels so empty classes stay representable."""
     y_true = np.asarray(y_true).astype(int)
     y_pred = np.asarray(y_pred).astype(int)
     return {
@@ -125,19 +86,10 @@ def confusion_counts(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, int]:
         "tp": int(np.sum((y_true == 1) & (y_pred == 1))),
     }
 
-
 def _ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / denominator if denominator else float("nan")
 
-
 def metrics_from_counts(counts: dict[str, int]) -> dict[str, float]:
-    """Derive fall-detection metrics; undefined quantities become NaN.
-
-    When a fold contains no positive ground truth (a subject with no Fall
-    recordings), every positive-class metric is reported as NaN rather than 0.0.
-    Precision would otherwise evaluate to ``0 / fp = 0.0`` and silently drag the
-    fold-averaged precision down even though the model behaved correctly.
-    """
     tn, fp, fn, tp = counts["tn"], counts["fp"], counts["fn"], counts["tp"]
     total = tn + fp + fn + tp
     nan = float("nan")
@@ -169,21 +121,11 @@ def metrics_from_counts(counts: dict[str, int]) -> dict[str, float]:
         "balanced_accuracy": balanced_accuracy,
     }
 
-
-# --------------------------------------------------------------------------- #
-# LOSO cross-validation
-# --------------------------------------------------------------------------- #
-
-
 def run_loso(
     table: pd.DataFrame,
     models: dict[str, Pipeline],
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, int]]]:
-    """Run LOSO-CV for every model.
-
-    Returns the per-fold metric table and the pooled confusion matrix per model.
-    """
     X = table[FEATURE_NAMES].to_numpy(dtype=float)
     y = table["label"].to_numpy(dtype=int)
     groups = table["subject_id"].to_numpy()
@@ -241,28 +183,14 @@ def run_loso(
 
     return pd.DataFrame(fold_rows), pooled
 
-
 def clone_pipeline(pipeline: Pipeline) -> Pipeline:
-    """Fresh unfitted copy, so folds never share fitted state."""
     from sklearn.base import clone
 
     return clone(pipeline)
 
-
-# --------------------------------------------------------------------------- #
-# Aggregation / reporting
-# --------------------------------------------------------------------------- #
-
-
 def summarize(
     fold_metrics: pd.DataFrame, pooled: dict[str, dict[str, int]]
 ) -> pd.DataFrame:
-    """Build the cross-model summary table.
-
-    ``pooled_*`` columns come from the summed confusion matrix over all folds
-    (every window counted exactly once). ``mean_*`` / ``std_*`` columns are the
-    NaN-aware fold averages, which show per-subject variability.
-    """
     rows: list[dict[str, object]] = []
     for model_name, counts in pooled.items():
         folds = fold_metrics[fold_metrics["model"] == model_name]
@@ -282,9 +210,7 @@ def summarize(
     summary = pd.DataFrame(rows)
     return summary.sort_values("pooled_f1", ascending=False).reset_index(drop=True)
 
-
 def format_confusion_matrix(model_name: str, counts: dict[str, int]) -> str:
-    """Human-readable aggregated confusion matrix."""
     tn, fp, fn, tp = counts["tn"], counts["fp"], counts["fn"], counts["tp"]
     return "\n".join(
         [
@@ -296,9 +222,7 @@ def format_confusion_matrix(model_name: str, counts: dict[str, int]) -> str:
         ]
     )
 
-
 def performance_table(summary: pd.DataFrame) -> pd.DataFrame:
-    """Compact table for console/report display."""
     view = summary[
         [
             "model",
@@ -327,9 +251,7 @@ def performance_table(summary: pd.DataFrame) -> pd.DataFrame:
         view[column] = view[column].astype(float).round(4)
     return view
 
-
 def markdown_table(frame: pd.DataFrame) -> str:
-    """Render a DataFrame as a Markdown table (avoids the optional tabulate dep)."""
     columns = [str(c) for c in frame.columns]
     cells = [[_format_cell(v) for v in row] for row in frame.itertuples(index=False)]
     widths = [
@@ -345,12 +267,10 @@ def markdown_table(frame: pd.DataFrame) -> str:
     out += [line(row) for row in cells]
     return "\n".join(out)
 
-
 def _format_cell(value: object) -> str:
     if isinstance(value, float):
         return "n/a" if np.isnan(value) else f"{value:.4f}"
     return str(value)
-
 
 def write_report(
     report_path: Path,
@@ -359,7 +279,6 @@ def write_report(
     pooled: dict[str, dict[str, int]],
     table: pd.DataFrame,
 ) -> None:
-    """Markdown summary of the benchmark run."""
     subjects = sorted(int(s) for s in table["subject_id"].unique())
     lines = [
         "# LOSO-CV fall detection benchmark",
@@ -428,7 +347,6 @@ def write_report(
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
-
 def save_results(
     fold_metrics: pd.DataFrame,
     summary: pd.DataFrame,
@@ -436,7 +354,6 @@ def save_results(
     table: pd.DataFrame,
     output_dir: Path | None = None,
 ) -> dict[str, Path]:
-    """Persist fold metrics, the summary table, confusion matrices and report."""
     output_dir = Path(output_dir or config.OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -465,7 +382,6 @@ def save_results(
     )
     write_report(paths["report"], summary, fold_metrics, pooled, table)
     return paths
-
 
 def print_results(
     summary: pd.DataFrame,
@@ -514,12 +430,6 @@ def print_results(
                 f"f1={row['f1']:.3f} sens={row['sensitivity']:.3f} spec={row['specificity']:.3f}"
             )
 
-
-# --------------------------------------------------------------------------- #
-# CLI
-# --------------------------------------------------------------------------- #
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark lightweight classifiers with Leave-One-Subject-Out CV."
@@ -541,7 +451,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
-
 def evaluate(
     table: pd.DataFrame,
     model_names: tuple[str, ...] = config.MODEL_NAMES,
@@ -549,7 +458,6 @@ def evaluate(
     n_jobs: int = -1,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, dict[str, int]]]:
-    """Full evaluation entry point reused by run_pipeline.py."""
     missing = [c for c in (*FEATURE_NAMES, "label", "subject_id") if c not in table.columns]
     if missing:
         raise ValueError(f"feature table is missing columns: {missing[:5]}")
@@ -567,7 +475,6 @@ def evaluate(
 
     return summary, fold_metrics, pooled
 
-
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     table = load_feature_table(args.features_csv)
@@ -578,7 +485,6 @@ def main(argv: list[str] | None = None) -> int:
         n_jobs=args.n_jobs,
     )
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

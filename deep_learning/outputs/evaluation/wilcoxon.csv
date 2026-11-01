@@ -1,0 +1,31 @@
+dl,dl_label,ml,ml_label,metric,subjects,dl_better,ml_better,ties,median_delta,p
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,roc_auc,13,9,4,0,0.0135975135975136,0.080322265625
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,balanced_accuracy,13,8,5,0,0.016934046345811193,0.497314453125
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,sensitivity,13,7,5,1,0.030303030303030387,0.6220703125
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,specificity,19,12,6,1,0.01538461538461533,0.2226337917111756
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,accuracy,19,12,7,0,0.010769230769230753,0.5152778625488281
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@0.30,RF-53 @ 0.30,roc_auc,13,9,4,0,0.0135975135975136,0.080322265625
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@0.30,RF-53 @ 0.30,balanced_accuracy,13,8,5,0,0.023713128976286857,0.2734375
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@0.30,RF-53 @ 0.30,sensitivity,13,5,8,0,-0.03296703296703296,0.09423828125
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@0.30,RF-53 @ 0.30,specificity,19,14,4,1,0.08461538461538465,0.00128936767578125
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@0.30,RF-53 @ 0.30,accuracy,19,15,3,1,0.03296703296703296,0.0055999755859375
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,roc_auc,13,12,1,0,0.03200503200503202,0.000732421875
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,balanced_accuracy,13,9,4,0,0.018435511856564446,0.21630859375
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,sensitivity,13,9,4,0,0.040723981900452566,0.454833984375
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,specificity,19,14,5,0,0.012145748987854255,0.19778767674415287
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,accuracy,19,12,6,1,0.0161943319838056,0.1083831787109375
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,roc_auc,13,12,1,0,0.038461538461538436,0.001708984375
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,balanced_accuracy,13,11,2,0,0.01788124156545212,0.039794921875
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,sensitivity,13,9,4,0,0.04858299595141702,0.10986328125
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,specificity,19,11,8,0,0.007692307692307665,0.48996734619140625
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,accuracy,19,12,6,1,0.013574660633484115,0.16735076904296875
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,roc_auc,13,10,3,0,0.014675318897412581,0.10986328125
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,balanced_accuracy,13,9,4,0,0.01140350877192986,0.339599609375
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,sensitivity,13,7,6,0,0.012820512820512886,0.684814453125
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,specificity,19,12,5,2,0.017351069982649014,0.2068939208984375
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,accuracy,19,12,6,1,0.011312217194570096,0.16735076904296875
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,roc_auc,13,12,1,0,0.03769885406669671,0.00244140625
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,balanced_accuracy,13,10,3,0,0.03986013986013981,0.080322265625
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,sensitivity,13,11,2,0,0.04895104895104896,0.026611328125
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,specificity,19,9,9,1,0.0,0.7987060546875
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,accuracy,19,10,8,1,0.004807692307692291,0.49507904052734375

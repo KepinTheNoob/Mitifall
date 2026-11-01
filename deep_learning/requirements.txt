@@ -1,0 +1,19 @@
+# deep_learning/ - time-series fall detection (PyTorch -> ONNX)
+#
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt                       # ml_pipeline (repo root)
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r deep_learning/requirements.txt
+#
+# Lower bounds are the versions every result in deep_learning/README.md was
+# produced with (Python 3.12, CPU only).
+numpy>=2.5
+pandas>=3.1
+scipy>=1.18
+scikit-learn>=1.9
+torch>=2.15
+onnx>=1.23
+onnxscript>=0.7
+onnxruntime>=1.31
+matplotlib>=3.11  # figures of evaluation_report.py (skip with --no-figures)
+pyserial>=3.5     # infer_stream.py --port ([env:dl_stream])

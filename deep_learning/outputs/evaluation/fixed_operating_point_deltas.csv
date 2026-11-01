@@ -1,0 +1,26 @@
+dl,dl_label,ml,ml_label,metric,delta,ci_low,ci_high,verdict
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,spec_at_sens_0.80,0.03074063482985423,-0.01803338748622997,0.06367434555945009,no clear difference
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,spec_at_sens_0.90,0.1594223620245926,0.03739250887056892,0.21973984434551322,DL higher
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,spec_at_sens_0.95,0.16356877323420077,0.06540200958387445,0.29034791346919125,DL higher
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,sens_at_spec_0.90,0.02677575306805502,-0.008836682075028456,0.0496311372986274,no clear difference
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf53@val,RF-53 @ val,sens_at_spec_0.95,-0.0033469691335068497,-0.07115323417536394,0.05710696672146438,no clear difference
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,spec_at_sens_0.80,0.02216185301687168,-0.013666424063297327,0.05618043312370078,no clear difference
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,spec_at_sens_0.90,0.13511581355447533,0.013619245337995396,0.19059235360426732,DL higher
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,spec_at_sens_0.95,0.1617100371747212,0.05996097197155599,0.25378792408294615,DL higher
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,sens_at_spec_0.90,0.02082558571959836,-0.007003875638841572,0.055392027110185614,no clear difference
+cnn_bilstm_gyro_9680000d,CNN-BiLSTM +gyro @ val,rf38@val,RF-38 @ val,sens_at_spec_0.95,0.005206396429899618,-0.045140583099469944,0.06825370253663114,no clear difference
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,spec_at_sens_0.80,0.04046325421790109,0.004697712402126292,0.07786949563518208,DL higher
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,spec_at_sens_0.90,0.14726908778953385,0.04030049733162869,0.2104792391046887,DL higher
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,spec_at_sens_0.95,0.1662853874749785,0.08919577108929995,0.35174548294284697,DL higher
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,sens_at_spec_0.90,0.04425436965414653,-0.0035934099251767548,0.0935798679978543,no clear difference
+cnn_bilstm_6fb27860,CNN-BiLSTM @ val,rf19@val,RF-19 @ val,sens_at_spec_0.95,0.07214577910003717,0.01051322927983731,0.13660443688667548,DL higher
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,spec_at_sens_0.80,0.04546754360880756,0.0041799248033402014,0.07918069668362511,DL higher
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,spec_at_sens_0.90,0.0996568487274806,-0.018129074689584197,0.1967263035877166,no clear difference
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,spec_at_sens_0.95,0.19016299685444665,0.043829812619515386,0.3431728664406879,DL higher
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,sens_at_spec_0.90,0.05355150613611004,0.022953145502443796,0.0848072345839068,DL higher
+cnn_bilstm_ens3_9c4b2f03,CNN-BiLSTM x3 @ val,rf19@val,RF-19 @ val,sens_at_spec_0.95,0.08404611379695048,0.033713001557829164,0.16317606218398611,DL higher
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,spec_at_sens_0.80,0.05376036602802403,0.021832092638544215,0.09343003398884422,DL higher
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,spec_at_sens_0.90,0.12525021446954532,0.01892304250559287,0.20382130708727547,DL higher
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,spec_at_sens_0.95,0.1888761795824993,0.026676050082090345,0.3286263767676168,DL higher
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,sens_at_spec_0.90,0.0635924135366307,0.014453318433795695,0.10384560306058764,DL higher
+tcn_06e0e567,TCN @ val,rf19@val,RF-19 @ val,sens_at_spec_0.95,0.07103012272220155,0.013074633527492606,0.14072001627812342,DL higher

@@ -1,18 +1,10 @@
-// =============================================================================
-//  scanner_main.cpp - bring-up diagnostics       [env:scanner]
-// =============================================================================
-//  pio run -e scanner -t upload && pio device monitor -e scanner
-//
-//  Scans the I2C bus on the configured pins, identifies the IMU and the
-//  magnetometer (HMC5883L vs QMC5883L clone), sweeps candidate GPIO pairs if
-//  nothing answers, then pulses the buzzer and the vibration motor so wiring can
-//  be confirmed by ear and by touch.
-// =============================================================================
-
 #include <Arduino.h>
 #include <Wire.h>
 
+#include <cmath>
+
 #include "alarm_manager.h"
+#include "barometer.h"
 #include "board_config.h"
 #include "i2c_diagnostics.h"
 
@@ -20,16 +12,46 @@ namespace {
 
 using namespace BoardConfig;
 
+constexpr bool kMotorCycleTest = true;
+constexpr std::uint32_t kMotorOnMs = 1000;
+constexpr std::uint32_t kMotorOffMs = 2000;
+
+constexpr std::uint32_t kBusRescanMs = 5000;
+constexpr std::uint32_t kBaroReportMs = 1000;
+
+constexpr std::uint32_t kBaroValidationDelayMs = 3000;
+constexpr float kBaroNoiseLimitM = 0.10f;
+constexpr float kBaroStillSpeedLimitMps = 0.25f;
+
 void banner() {
     Serial.println();
     Serial.println("=====================================================");
-    Serial.println(" Mitifall - I2C and actuator diagnostics");
+    Serial.println(" Mitifall - I2C, barometer and actuator diagnostics");
     Serial.printf(" SDA=%d SCL=%d @ %lu Hz\n", kI2cSdaPin, kI2cSclPin,
                   static_cast<unsigned long>(kI2cFrequencyHz));
     Serial.printf(" buzzer GPIO%d (active %s) | motor GPIO%d (active %s) | button GPIO%d\n",
                   kBuzzerPin, kBuzzerActiveHigh ? "HIGH" : "LOW", kVibrationPin,
                   kVibrationActiveHigh ? "HIGH" : "LOW", kDismissButtonPin);
     Serial.println("=====================================================");
+}
+
+const char *barometerVerdict(const I2cDiagnostics::ScanResult &scan) {
+    for (std::uint8_t address : {kBmp280AddrPrimary, kBmp280AddrSecondary}) {
+        const I2cDiagnostics::DeviceInfo *info = scan.find(address);
+        if (info == nullptr) {
+            continue;
+        }
+        switch (info->kind) {
+            case I2cDiagnostics::DeviceKind::Bmp280:
+            case I2cDiagnostics::DeviceKind::Bme280:
+                return "FOUND";
+            case I2cDiagnostics::DeviceKind::Bmp180:
+                return "BMP180 found - unsupported, needs a BMP280/BME280";
+            default:
+                return "answering, but the chip ID is not a BMP280/BME280";
+        }
+    }
+    return "missing";
 }
 
 void reportExpectations(const I2cDiagnostics::ScanResult &scan) {
@@ -44,6 +66,7 @@ void reportExpectations(const I2cDiagnostics::ScanResult &scan) {
     Serial.printf("  HMC5883L (0x1E)      : %s\n", hmc ? "FOUND" : "missing");
     Serial.printf("  QMC5883L (0x0D)      : %s\n", qmcL ? "FOUND" : "missing");
     Serial.printf("  QMC5883P (0x2C)      : %s\n", qmcP ? "FOUND" : "missing");
+    Serial.printf("  BMP280   (0x76/0x77) : %s\n", barometerVerdict(scan));
 
     if (magCount == 0) {
         Serial.println("  -> no magnetometer: only the 6-DoF (acc_gyro) model can run");
@@ -55,7 +78,6 @@ void reportExpectations(const I2cDiagnostics::ScanResult &scan) {
     }
 }
 
-/// Non-blocking actuator test: AlarmManager owns the timing, we just pump it.
 void runActuatorTest() {
     Serial.println();
     Serial.println("Actuator test: buzzer only, then motor only, then both");
@@ -86,28 +108,117 @@ void runActuatorTest() {
 
         AlarmManager::trigger(pattern);
 
-        // Tambahkan delay minimal 10ms di dalam polling loop
         while (AlarmManager::isAlerting()) {
             AlarmManager::update();
             delay(10);
         }
 
-        delay(300); // Jeda antar pengujian aktuator
+        delay(300);
     }
 
     Serial.println("Actuator test complete");
     Serial.flush();
 }
 
-}  // namespace
+void reportBarometer() {
+    if (!Barometer::ready()) {
+        return;
+    }
+    const BaroMath::AltitudeTracker &t = Barometer::tracker();
+    if (!t.calibrated() || t.calibrating()) {
+        Serial.printf("BARO calibrating altitude reference... %lu samples, keep the board still\n",
+                      static_cast<unsigned long>(t.calibrationSamples()));
+        return;
+    }
+    Serial.printf("BARO p=%.2f hPa T=%.1f C alt=%+.2f m dh(%.1fs)=%+.2f m vz=%+.2f m/s "
+                  "noise=%.3f m read=%lu us fail=%lu\n",
+                  Barometer::pressureHpa(), Barometer::temperatureC(), t.altitudeM(),
+                  t.windowSpanS(), t.altitudeDiffM(), t.verticalSpeedMps(), t.noiseM(),
+                  static_cast<unsigned long>(Barometer::lastReadMicros()),
+                  static_cast<unsigned long>(Barometer::readFailures()));
+}
+
+void serviceBaroValidation() {
+    static bool wasCalibrated = false;
+    static bool reported = false;
+    static std::uint32_t referenceSetMs = 0;
+    static std::uint32_t failuresAtStart = 0;
+
+    if (!Barometer::ready()) {
+        return;
+    }
+    const BaroMath::AltitudeTracker &t = Barometer::tracker();
+    const bool calibrated = t.calibrated() && !t.calibrating();
+    if (calibrated && !wasCalibrated) {
+        referenceSetMs = millis();
+        failuresAtStart = Barometer::readFailures();
+        reported = false;
+        Serial.printf("BARO reference set: p0=%.2f hPa from %lu samples\n",
+                      t.referencePa() / 100.0f,
+                      static_cast<unsigned long>(t.calibrationSamples()));
+    }
+    wasCalibrated = calibrated;
+    if (!calibrated || reported || millis() - referenceSetMs < kBaroValidationDelayMs) {
+        return;
+    }
+    reported = true;
+
+    const float noise = t.noiseM();
+    const float speed = std::fabs(t.verticalSpeedMps());
+    const std::uint32_t failures = Barometer::readFailures() - failuresAtStart;
+    const bool noiseOk = noise < kBaroNoiseLimitM;
+    const bool stillOk = speed < kBaroStillSpeedLimitMps;
+    const bool readsOk = failures == 0;
+
+    Serial.println("BARO validation (board held still):");
+    Serial.printf("  altitude noise  %.3f m   (limit %.2f m)    %s\n", noise, kBaroNoiseLimitM,
+                  noiseOk ? "PASS" : "WARN");
+    Serial.printf("  vertical speed  %.3f m/s (limit %.2f m/s)  %s\n", speed,
+                  kBaroStillSpeedLimitMps, stillOk ? "PASS" : "WARN");
+    Serial.printf("  read failures   %lu                        %s\n",
+                  static_cast<unsigned long>(failures), readsOk ? "PASS" : "WARN");
+    Serial.printf("  read latency    %lu us per burst read\n",
+                  static_cast<unsigned long>(Barometer::lastReadMicros()));
+    if (!noiseOk || !stillOk) {
+        Serial.println("  -> keep the board still, away from fans/air-con draughts and heat");
+        Serial.println("     sources, then press the GPIO3 button to re-zero and re-check");
+    }
+}
+
+void serviceMotorCycle() {
+    static std::uint32_t nextStartMs = 0;
+    static bool running = false;
+
+    const std::uint32_t now = millis();
+    if (running) {
+        if (!AlarmManager::isAlerting()) {
+            running = false;
+            nextStartMs = now + kMotorOffMs;
+            Serial.println("Motor OFF...");
+        }
+        return;
+    }
+    if (static_cast<std::int32_t>(now - nextStartMs) >= 0 && !AlarmManager::isAlerting()) {
+        AlarmManager::Pattern pattern;
+        pattern.pulseOnMs = kMotorOnMs;
+        pattern.pulseOffMs = 0;
+        pattern.durationMs = kMotorOnMs;
+        pattern.useBuzzer = false;
+        pattern.useVibration = true;
+        AlarmManager::trigger(pattern);
+        running = true;
+        Serial.println("Motor ON (GETAR)...");
+    }
+}
+
+}
 
 void setup() {
-    // Silence the actuators before anything else, so a floating pin cannot leave
-    // the buzzer sounding through boot and the USB CDC wait below.
+
     AlarmManager::forceOff();
 
     Serial.begin(115200);
-    // Native USB CDC needs a moment before the host opens the port.
+
     const std::uint32_t waitStart = millis();
     while (!Serial && millis() - waitStart < 3000) {
     }
@@ -140,19 +251,29 @@ void setup() {
         Wire.begin(kI2cSdaPin, kI2cSclPin, kI2cFrequencyHz);
     }
 
+    Serial.println();
+    Serial.println("Barometer:");
+    const Barometer::Status baro = Barometer::begin(Serial, Wire);
+    if (baro.ready) {
+        Serial.println("  self-check: chip ID, factory calibration and first reading PASS");
+        Serial.println("  keep the board still for ~5 s after the actuator test for validation");
+    }
+
     runActuatorTest();
 
     Serial.println();
-    Serial.println("Idle. Re-scanning every 5 s; reset to run the full sweep again.");
+    Serial.println("Idle. Re-scanning every 5 s; press GPIO3 to re-zero the barometer.");
 }
-const int kMotorPin = BoardConfig::kVibrationPin;
+
 void loop() {
     static std::uint32_t lastScanMs = 0;
+    static std::uint32_t lastBaroMs = 0;
     static bool lastButton = false;
 
     AlarmManager::update();
+    Barometer::service();
+    serviceBaroValidation();
 
-    // Live button feedback so the GPIO3 wiring can be verified by pressing it.
     if (AlarmManager::buttonHeld() != lastButton) {
         lastButton = AlarmManager::buttonHeld();
         Serial.printf("Button GPIO%d: %s\n", kDismissButtonPin,
@@ -160,9 +281,13 @@ void loop() {
     }
     if (AlarmManager::consumeDismissPress()) {
         Serial.println("  -> dismiss press registered (would silence an active alarm)");
+        if (Barometer::ready()) {
+            Barometer::rezero();
+            Serial.println("  -> BARO re-zeroing altitude: keep the board still for 2 s");
+        }
     }
 
-    if (millis() - lastScanMs >= 5000) {
+    if (millis() - lastScanMs >= kBusRescanMs) {
         lastScanMs = millis();
         const auto scan = I2cDiagnostics::scanBus(Wire);
         Serial.printf("[%lus] %u device(s) on the bus\n",
@@ -171,11 +296,12 @@ void loop() {
         I2cDiagnostics::printScanResult(Serial, scan);
     }
 
-    Serial.println("Motor ON (GETAR)...");
-    digitalWrite(kMotorPin, HIGH);
-    delay(1000); // Getar selama 1 detik
+    if (millis() - lastBaroMs >= kBaroReportMs) {
+        lastBaroMs = millis();
+        reportBarometer();
+    }
 
-    Serial.println("Motor OFF...");
-    digitalWrite(kMotorPin, LOW);
-    delay(2000); // Berhenti 2 detik
+    if (kMotorCycleTest) {
+        serviceMotorCycle();
+    }
 }

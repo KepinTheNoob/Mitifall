@@ -1,0 +1,5 @@
+id,timestamp,accel_mag,motion_status,pressure,altitude,alarm_state,raw_payload
+1,2026-11-01 10:11:54.060,0.9264,,,,0,"{""topic"":""dheovanwa/feeds/accel-mag"",""payload"":""0.9264"",""qos"":0,""retain"":false,""received_at"":""2026-11-01T10:11:54.060Z""}"
+2,2026-11-01 10:11:56.629,0.9264,,1012.3,,0,"{""topic"":""dheovanwa/feeds/pressure"",""payload"":""1012.30"",""qos"":0,""retain"":false,""received_at"":""2026-11-01T10:11:56.629Z""}"
+3,2026-11-01 10:11:59.085,0.9266,,1012.3,,0,"{""topic"":""dheovanwa/feeds/accel-mag"",""payload"":""0.9266"",""qos"":0,""retain"":false,""received_at"":""2026-11-01T10:11:59.085Z""}"
+4,2026-11-01 10:12:01.646,0.9266,,1012.3,-0.04,0,"{""topic"":""dheovanwa/feeds/altitude"",""payload"":""-0.04"",""qos"":0,""retain"":false,""received_at"":""2026-11-01T10:12:01.646Z""}"

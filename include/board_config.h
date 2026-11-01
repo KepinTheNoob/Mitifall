@@ -1,95 +1,46 @@
-// =============================================================================
-//  board_config.h - pin map, timing and unit conventions shared by all targets
-// =============================================================================
-//  Target: LOLIN C3 Mini (ESP32-C3, RV32IMC - no hardware FPU, all float math
-//  is software emulated, which is why the hot paths use float and not double).
-// =============================================================================
-
 #pragma once
 
 #include <cstdint>
 
 namespace BoardConfig {
 
-// ---------------------------------------------------------------------------
-// I2C bus
-// ---------------------------------------------------------------------------
-// LOLIN C3 Mini variant defaults are SDA = 8, SCL = 10. Override here if your
-// wiring differs; scanner_main can sweep candidate pairs to find the real pins.
 constexpr int kI2cSdaPin = 8;
 constexpr int kI2cSclPin = 9;
 constexpr std::uint32_t kI2cFrequencyHz = 400000;
 
-// Slower clock used while probing, for reliability on long jumper wires.
 constexpr std::uint32_t kI2cProbeFrequencyHz = 100000;
 
-// Device addresses.
-constexpr std::uint8_t kMpu6050AddrPrimary = 0x68;    // AD0 low
-constexpr std::uint8_t kMpu6050AddrSecondary = 0x69;  // AD0 high
+constexpr std::uint8_t kMpu6050AddrPrimary = 0x68;
+constexpr std::uint8_t kMpu6050AddrSecondary = 0x69;
 
-// Three magnetometer parts ship on boards sold as "HMC5883L", each with its own
-// address AND its own register map. All three are probed, in this order.
-constexpr std::uint8_t kHmc5883Addr = 0x1E;   // genuine Honeywell HMC5883L
-constexpr std::uint8_t kQmc5883lAddr = 0x0D;  // QST QMC5883L clone
-constexpr std::uint8_t kQmc5883pAddr = 0x2C;  // QST QMC5883P, the current part
+constexpr std::uint8_t kHmc5883Addr = 0x1E;
+constexpr std::uint8_t kQmc5883lAddr = 0x0D;
+constexpr std::uint8_t kQmc5883pAddr = 0x2C;
 
-// ---------------------------------------------------------------------------
-// Actuators
-// ---------------------------------------------------------------------------
-constexpr int kBuzzerPin = 2;     // active buzzer module input
-constexpr int kVibrationPin = 1;  // vibration motor driver input (README + wiring: GPIO0)
+constexpr std::uint8_t kBmp280AddrPrimary = 0x76;
+constexpr std::uint8_t kBmp280AddrSecondary = 0x77;
 
-// Polarity is per device, because a buzzer breakout and a motor driver board are
-// often wired the opposite way round from each other.
-//
-//   true  = pin HIGH turns the device ON  (direct transistor base / gate)
-//   false = pin LOW  turns the device ON  (common on 3-pin "module" breakouts)
-//
-// How to determine it: flash [env:scanner]. It drives each actuator in turn for
-// ~0.9 s. If a device is silent during its own step but runs the rest of the
-// time, that device's flag is inverted - flip it and re-flash.
-//
-// If a device is on CONTINUOUSLY regardless of either setting, the problem is
-// wiring, not firmware: check that the module's IN pin is actually on the GPIO
-// (not tied to VCC/GND) and that the motor is fed through the driver transistor
-// rather than straight off the 3V3 rail.
+constexpr int kBuzzerPin = 2;
+constexpr int kVibrationPin = 1;
+
 constexpr bool kBuzzerActiveHigh = true;
-// Coin-motor module: IN drives the base of an NPN transistor, so HIGH = motor on.
+
 constexpr bool kVibrationActiveHigh = true;
 
-// ---------------------------------------------------------------------------
-// Dismiss button
-// ---------------------------------------------------------------------------
-// Momentary push button: one leg to GPIO3, the other to GND. The internal
-// pull-up holds the line HIGH when released, so a press reads LOW.
 constexpr int kDismissButtonPin = 3;
 constexpr bool kButtonActiveLow = true;
 constexpr std::uint32_t kButtonDebounceMs = 40;
 
-// ---------------------------------------------------------------------------
-// Acquisition timing
-// ---------------------------------------------------------------------------
 constexpr std::uint32_t kSampleRateHz = 50;
-constexpr std::uint32_t kSamplePeriodMs = 1000 / kSampleRateHz;  // 20 ms
+constexpr std::uint32_t kSamplePeriodMs = 1000 / kSampleRateHz;
 
-// 2.0 s window with 50 % overlap, matching the Python pipeline geometry.
-constexpr std::size_t kWindowSamples = 2 * kSampleRateHz;  // 100
-constexpr std::size_t kHopSamples = kWindowSamples / 2;    // 50 -> 1.0 s hop
+constexpr std::size_t kWindowSamples = 2 * kSampleRateHz;
+constexpr std::size_t kHopSamples = kWindowSamples / 2;
 
-// ---------------------------------------------------------------------------
-// Unit conventions - MUST match the training data
-// ---------------------------------------------------------------------------
-// UMAFall wrist units: accelerometer in g, gyroscope in deg/s, magnetometer in
-// the capture's raw magnetometer scale. The Adafruit drivers report m/s^2 and
-// rad/s, so sensor_hub converts on read.
-constexpr float kStandardGravity = 9.80665f;      // m/s^2 per g
-constexpr float kRadToDeg = 57.2957795131f;       // deg per rad
+constexpr float kStandardGravity = 9.80665f;
+constexpr float kRadToDeg = 57.2957795131f;
 
-// The training capture saturates at these limits (verified against the dataset:
-// per-axis |a| tops out at 8.00 g and |w| at 256 deg/s). The MPU6050 is
-// configured to the matching ranges and readings are clamped, so an on-device
-// impact cannot land outside the range the forest was trained on.
 constexpr float kAccelLimitG = 8.0f;
 constexpr float kGyroLimitDps = 256.0f;
 
-}  // namespace BoardConfig
+}

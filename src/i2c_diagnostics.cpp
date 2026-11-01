@@ -5,30 +5,28 @@
 namespace I2cDiagnostics {
 namespace {
 
-// MPU6050 / MPU-family
 constexpr std::uint8_t kRegWhoAmI = 0x75;
 constexpr std::uint8_t kWhoAmIMpu6050 = 0x68;
 
-// HMC5883L identification registers spell 'H', '4', '3'.
 constexpr std::uint8_t kRegHmcIdA = 0x0A;
-constexpr std::uint8_t kHmcIdA = 0x48;  // 'H'
-constexpr std::uint8_t kHmcIdB = 0x34;  // '4'
-constexpr std::uint8_t kHmcIdC = 0x33;  // '3'
+constexpr std::uint8_t kHmcIdA = 0x48;
+constexpr std::uint8_t kHmcIdB = 0x34;
+constexpr std::uint8_t kHmcIdC = 0x33;
 
-// QMC5883L exposes a chip-ID register that reads 0xFF.
 constexpr std::uint8_t kRegQmcLChipId = 0x0D;
 constexpr std::uint8_t kQmcLChipId = 0xFF;
 
-// QMC5883P: chip ID at register 0x00 reads 0x80.
 constexpr std::uint8_t kRegQmcPChipId = 0x00;
 constexpr std::uint8_t kQmcPChipId = 0x80;
 
+constexpr std::uint8_t kRegBoschChipId = 0xD0;
+
 bool isMpuVariant(std::uint8_t whoAmI) {
-    // MPU6500 = 0x70, MPU9250 = 0x71, MPU9255 = 0x73, MPU6555 = 0x7C.
+
     return whoAmI == 0x70 || whoAmI == 0x71 || whoAmI == 0x73 || whoAmI == 0x7C;
 }
 
-}  // namespace
+}
 
 const char *deviceKindName(DeviceKind kind) {
     switch (kind) {
@@ -42,6 +40,12 @@ const char *deviceKindName(DeviceKind kind) {
             return "QMC5883L (QST clone)";
         case DeviceKind::Qmc5883P:
             return "QMC5883P (QST)";
+        case DeviceKind::Bmp280:
+            return "BMP280 (barometer)";
+        case DeviceKind::Bme280:
+            return "BME280 (barometer)";
+        case DeviceKind::Bmp180:
+            return "BMP180 (unsupported)";
         default:
             return "unknown device";
     }
@@ -66,7 +70,7 @@ bool probeAddress(TwoWire &bus, std::uint8_t address) {
 bool readRegister(TwoWire &bus, std::uint8_t address, std::uint8_t reg, std::uint8_t &value) {
     bus.beginTransmission(address);
     bus.write(reg);
-    if (bus.endTransmission(false) != 0) {  // repeated start
+    if (bus.endTransmission(false) != 0) {
         return false;
     }
     if (bus.requestFrom(static_cast<int>(address), 1) != 1) {
@@ -106,9 +110,7 @@ DeviceKind identify(TwoWire &bus, std::uint8_t address, std::uint8_t &idByte) {
 
     if (address == BoardConfig::kQmc5883lAddr) {
         readRegister(bus, address, kRegQmcLChipId, idByte);
-        // Some clones report an ID other than 0xFF but are otherwise compatible,
-        // so the address alone is treated as sufficient evidence here and the
-        // driver's own probe makes the final call.
+
         (void)kQmcLChipId;
         return DeviceKind::Qmc5883L;
     }
@@ -118,6 +120,25 @@ DeviceKind identify(TwoWire &bus, std::uint8_t address, std::uint8_t &idByte) {
             return DeviceKind::Qmc5883P;
         }
         return DeviceKind::Unknown;
+    }
+
+    if (address == BoardConfig::kBmp280AddrPrimary ||
+        address == BoardConfig::kBmp280AddrSecondary) {
+        if (!readRegister(bus, address, kRegBoschChipId, idByte)) {
+            return DeviceKind::Unknown;
+        }
+        switch (idByte) {
+            case 0x58:
+            case 0x56:
+            case 0x57:
+                return DeviceKind::Bmp280;
+            case 0x60:
+                return DeviceKind::Bme280;
+            case 0x55:
+                return DeviceKind::Bmp180;
+            default:
+                return DeviceKind::Unknown;
+        }
     }
 
     return DeviceKind::Unknown;
@@ -154,10 +175,6 @@ void printScanResult(Stream &out, const ScanResult &result) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pin sweeping
-// ---------------------------------------------------------------------------
-
 const int kCandidatePins[] = {0, 1, 5, 6, 7, 8, 10, 2, 9, 20, 21};
 const std::size_t kCandidatePinCount = sizeof(kCandidatePins) / sizeof(kCandidatePins[0]);
 
@@ -166,16 +183,16 @@ bool isPinUsable(int pin) {
         return false;
     }
     if (pin >= 11 && pin <= 17) {
-        return false;  // internal SPI flash
+        return false;
     }
     if (pin == 18 || pin == 19) {
-        return false;  // native USB D-/D+
+        return false;
     }
     if (pin == BoardConfig::kBuzzerPin || pin == BoardConfig::kVibrationPin) {
-        return false;  // driving an actuator line as I2C would beep/buzz
+        return false;
     }
     if (pin == BoardConfig::kDismissButtonPin) {
-        return false;  // the button holds this line, it is not a bus candidate
+        return false;
     }
     return true;
 }
@@ -198,7 +215,7 @@ std::size_t sweepPins(Stream &out, PinCandidate *results, std::size_t maxResults
             }
 
             Wire.end();
-            // Idle-high bus before handing the pins to the peripheral.
+
             pinMode(sda, INPUT_PULLUP);
             pinMode(scl, INPUT_PULLUP);
             if (!Wire.begin(sda, scl, BoardConfig::kI2cProbeFrequencyHz)) {
@@ -213,7 +230,7 @@ std::size_t sweepPins(Stream &out, PinCandidate *results, std::size_t maxResults
                 }
             }
 
-            if (devices > 0 && devices < 0x7F) {  // all-ACK means the bus is stuck
+            if (devices > 0 && devices < 0x7F) {
                 out.printf("  SDA=%2d SCL=%2d -> %u device(s)\n", sda, scl,
                            static_cast<unsigned>(devices));
                 if (found < maxResults) {
@@ -234,4 +251,4 @@ std::size_t sweepPins(Stream &out, PinCandidate *results, std::size_t maxResults
     return found;
 }
 
-}  // namespace I2cDiagnostics
+}

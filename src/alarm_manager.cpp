@@ -13,13 +13,11 @@ std::uint32_t gAlertStartedMs = 0;
 std::uint32_t gPhaseStartedMs = 0;
 bool gPulseHigh = false;
 
-// Debounced dismiss button.
-bool gButtonStable = false;      // true = pressed
+bool gButtonStable = false;
 bool gButtonLastRaw = false;
 std::uint32_t gButtonChangedMs = 0;
 bool gDismissPending = false;
 
-/// Logic level that leaves a device OFF.
 inline int idleLevel(bool activeHigh) { return activeHigh ? LOW : HIGH; }
 
 inline void writeDevice(int pin, bool activeHigh, bool on) {
@@ -53,14 +51,12 @@ void pollButton() {
         return;
     }
     if (now - gButtonChangedMs < BoardConfig::kButtonDebounceMs) {
-        return;  // still settling
+        return;
     }
 
     gButtonStable = raw;
-    if (gButtonStable) {  // press edge
-        // Only a press that actually silenced an alarm counts as a dismissal.
-        // Otherwise an idle press would start the re-trigger cooldown in
-        // inference_main and suppress a real fall for the next few seconds.
+    if (gButtonStable) {
+
         if (gState == State::Alerting) {
             gDismissPending = true;
         }
@@ -68,19 +64,16 @@ void pollButton() {
     }
 }
 
-}  // namespace
+}
 
 void forceOff() {
-    // Preset the output latch BEFORE switching the pin to OUTPUT. Doing it the
-    // other way round drives the reset-default LOW for a few microseconds, which
-    // an active-low module hears as a click.
+
     digitalWrite(BoardConfig::kBuzzerPin, idleLevel(BoardConfig::kBuzzerActiveHigh));
     digitalWrite(BoardConfig::kVibrationPin, idleLevel(BoardConfig::kVibrationActiveHigh));
 
     pinMode(BoardConfig::kBuzzerPin, OUTPUT);
     pinMode(BoardConfig::kVibrationPin, OUTPUT);
 
-    // Re-assert now that the driver is actually enabled.
     digitalWrite(BoardConfig::kBuzzerPin, idleLevel(BoardConfig::kBuzzerActiveHigh));
     digitalWrite(BoardConfig::kVibrationPin, idleLevel(BoardConfig::kVibrationActiveHigh));
 
@@ -95,8 +88,6 @@ void begin() {
     pinMode(BoardConfig::kDismissButtonPin,
             BoardConfig::kButtonActiveLow ? INPUT_PULLUP : INPUT_PULLDOWN);
 
-    // Seed the debouncer with the current state so holding the button at boot is
-    // not reported as a fresh press.
     gButtonLastRaw = readButtonRaw();
     gButtonStable = gButtonLastRaw;
     gButtonChangedMs = millis();
@@ -127,9 +118,7 @@ void update() {
     pollButton();
 
     if (gState != State::Alerting) {
-        // Defensive: keep both lines actively driven to their off level whenever
-        // no alert is running, so no glitch or stray write can leave the buzzer
-        // or motor latched on.
+
         digitalWrite(BoardConfig::kBuzzerPin, idleLevel(BoardConfig::kBuzzerActiveHigh));
         digitalWrite(BoardConfig::kVibrationPin, idleLevel(BoardConfig::kVibrationActiveHigh));
         return;
@@ -137,15 +126,11 @@ void update() {
 
     const std::uint32_t now = millis();
 
-    // Unsigned subtraction keeps this correct across the 49-day millis() wrap.
     if (now - gAlertStartedMs >= gActivePattern.durationMs) {
         cancel();
         return;
     }
 
-    // pulseOffMs == 0 means "single shot": energise once for pulseOnMs and stop.
-    // Without this, a zero-length off phase would toggle on every iteration and
-    // buzz at the loop rate.
     if (gActivePattern.pulseOffMs == 0) {
         if (now - gAlertStartedMs >= gActivePattern.pulseOnMs) {
             cancel();
@@ -174,4 +159,4 @@ bool consumeDismissPress() {
 
 bool buttonHeld() { return gButtonStable; }
 
-}  // namespace AlarmManager
+}

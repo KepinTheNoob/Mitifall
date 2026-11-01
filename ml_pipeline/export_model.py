@@ -1,31 +1,3 @@
-"""Export the trained Random Forest to a self-contained C++ header for the ESP32-C3.
-
-What this produces
-------------------
-* ``include/RandomForest.h``       - flat-array decision forest + probability API
-* ``include/features_order.json``  - the exact feature sequence ``predict()`` expects
-
-Why a hand-rolled exporter instead of micromlgen / m2cgen
----------------------------------------------------------
-``micromlgen``'s random-forest port emits nested ``if``/``else`` code that only
-returns an ``argmax`` class label, so there is no probability to threshold on -
-which is exactly what this project needs. ``m2cgen`` does emit probabilities but
-unrolls every split into straight-line code, which balloons flash usage and
-compile time for a 60-tree forest.
-
-This exporter emits the forest as flat ``static const`` arrays walked by a ~20
-line interpreter. It is compact, compiles in seconds, and reproduces
-``predict_proba``'s class-1 column exactly, because it stores each leaf's class
-distribution and averages over trees the same way scikit-learn does.
-
-Usage
------
-    python ml_pipeline/export_model.py
-    python ml_pipeline/export_model.py --axes acc_gyro      # 38-feature variant
-    python ml_pipeline/export_model.py --n-estimators 30 --max-depth 8
-    python ml_pipeline/export_model.py --no-write           # report only
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -43,7 +15,7 @@ try:
     from . import config
     from .feature_extraction import FEATURE_NAMES, load_feature_table
     from .train_evaluate import confusion_counts, metrics_from_counts
-except ImportError:  # pragma: no cover - direct script execution
+except ImportError:
     import config
     from feature_extraction import FEATURE_NAMES, load_feature_table
     from train_evaluate import confusion_counts, metrics_from_counts
@@ -51,25 +23,16 @@ except ImportError:  # pragma: no cover - direct script execution
 HEADER_PATH = config.PROJECT_ROOT / "include" / "RandomForest.h"
 FEATURES_JSON_PATH = config.PROJECT_ROOT / "include" / "features_order.json"
 
-# Axis subsets. "all9" is the full 53-feature space the pipeline was evaluated
-# on; "acc_gyro" drops every magnetometer-derived feature for 6-DoF hardware.
 AXIS_SETS: dict[str, tuple[str, ...]] = {
     "all9": config.SENSOR_AXES,
     "acc_gyro": config.ACC_AXES + config.GYR_AXES,
 }
 
-LEAF_SENTINEL = 255  # feature index marking a leaf node
+LEAF_SENTINEL = 255
 THRESHOLD_SWEEP = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.70, 0.80)
 N_SELFTEST_VECTORS = 3
 
-
-# --------------------------------------------------------------------------- #
-# Feature selection
-# --------------------------------------------------------------------------- #
-
-
 def select_features(axis_set: str) -> list[str]:
-    """Feature names for an axis subset, preserving the pipeline's order."""
     if axis_set not in AXIS_SETS:
         raise ValueError(f"unknown axis set {axis_set!r}; choose from {list(AXIS_SETS)}")
     axes = AXIS_SETS[axis_set]
@@ -77,29 +40,18 @@ def select_features(axis_set: str) -> list[str]:
     keep: list[str] = []
     for name in FEATURE_NAMES:
         prefix = name.split("_")[0]
-        if prefix in config.SENSOR_AXES:  # per-axis statistic
+        if prefix in config.SENSOR_AXES:
             if prefix in axes:
                 keep.append(name)
-        elif name.startswith("acc") or name.startswith("gyr"):  # magnitude / SMA
+        elif name.startswith("acc") or name.startswith("gyr"):
             keep.append(name)
-        else:  # pragma: no cover - defensive
+        else:
             raise ValueError(f"unclassified feature name: {name}")
     return keep
-
-
-# --------------------------------------------------------------------------- #
-# Out-of-fold probabilities and threshold sweep
-# --------------------------------------------------------------------------- #
-
 
 def oof_probabilities(
     table: pd.DataFrame, feature_names: list[str], forest_params: dict
 ) -> np.ndarray:
-    """Leave-One-Subject-Out out-of-fold P(fall) for every window.
-
-    Thresholds must be chosen on predictions from subjects the model never saw,
-    otherwise the operating point is tuned on training data.
-    """
     X = table[feature_names].to_numpy(dtype=float)
     y = table["label"].to_numpy(dtype=int)
     groups = table["subject_id"].to_numpy()
@@ -115,9 +67,7 @@ def oof_probabilities(
     assert not np.isnan(proba).any(), "every window must receive an out-of-fold score"
     return proba
 
-
 def threshold_table(y_true: np.ndarray, proba: np.ndarray) -> pd.DataFrame:
-    """Pooled sensitivity/specificity/F1 per decision threshold."""
     rows = []
     for threshold in THRESHOLD_SWEEP:
         counts = confusion_counts(y_true, (proba >= threshold).astype(int))
@@ -136,18 +86,7 @@ def threshold_table(y_true: np.ndarray, proba: np.ndarray) -> pd.DataFrame:
         )
     return pd.DataFrame(rows)
 
-
-# --------------------------------------------------------------------------- #
-# Forest flattening
-# --------------------------------------------------------------------------- #
-
-
 class FlatForest:
-    """Struct-of-arrays representation of a fitted RandomForestClassifier.
-
-    Leaves are marked with ``feature == LEAF_SENTINEL`` and reuse the
-    ``threshold`` slot to carry P(class = 1), which avoids a separate array.
-    """
 
     def __init__(self, forest: RandomForestClassifier):
         self.features: list[int] = []
@@ -173,7 +112,7 @@ class FlatForest:
     def _append_tree(self, tree) -> None:
         base = len(self.features)
         n_nodes = tree.node_count
-        # Reserve slots so children can be written as absolute global indices.
+
         self.features.extend([0] * n_nodes)
         self.thresholds.extend([0.0] * n_nodes)
         self.left.extend([0] * n_nodes)
@@ -181,14 +120,13 @@ class FlatForest:
 
         values = tree.value.reshape(n_nodes, -1).astype(float)
         totals = values.sum(axis=1, keepdims=True)
-        # sklearn has changed whether tree_.value holds counts or fractions;
-        # normalising here is correct under either convention.
+
         distribution = np.divide(values, totals, out=np.zeros_like(values), where=totals > 0)
 
         for node in range(n_nodes):
             index = base + node
             left_child = int(tree.children_left[node])
-            if left_child == -1:  # leaf
+            if left_child == -1:
                 self.features[index] = LEAF_SENTINEL
                 self.thresholds[index] = float(distribution[node, 1])
                 self.left[index] = 0
@@ -215,11 +153,9 @@ class FlatForest:
         return sum(1 for f in self.features if f == LEAF_SENTINEL)
 
     def flash_bytes(self) -> int:
-        """uint8 feature + float threshold + 2 x uint16 child + root table."""
         return self.n_nodes * (1 + 4 + 2 + 2) + self.n_trees * 2
 
     def predict_proba(self, x: np.ndarray) -> float:
-        """Reference implementation, mirrors the generated C++ exactly."""
         total = 0.0
         for root in self.roots:
             node = root
@@ -232,33 +168,19 @@ class FlatForest:
             total += self.thresholds[node]
         return total / self.n_trees
 
-
-# --------------------------------------------------------------------------- #
-# C++ emission
-# --------------------------------------------------------------------------- #
-
-
 def _wrap(values: list[str], per_line: int, indent: str = "    ") -> str:
     lines = [
         indent + ", ".join(values[i : i + per_line]) for i in range(0, len(values), per_line)
     ]
     return ",\n".join(lines)
 
-
 def _float_literal(value: float) -> str:
-    """Render a C++ float literal.
-
-    ``{:.9g}`` formats 0.0 as "0" and 1.0 as "1"; suffixing those with 'f' gives
-    ``0f``, which is an integer literal with an unknown user-defined suffix and
-    fails to compile. Force a decimal point when the mantissa has no '.' or 'e'.
-    """
     if not np.isfinite(value):
         raise ValueError(f"cannot emit non-finite literal: {value}")
     text = f"{value:.9g}"
     if "." not in text and "e" not in text and "E" not in text:
         text += ".0"
     return text + "f"
-
 
 def render_header(
     flat: FlatForest,
@@ -268,53 +190,23 @@ def render_header(
     selftest: list[tuple[np.ndarray, float]],
     metadata: dict[str, object],
 ) -> str:
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     source_indices = [FEATURE_NAMES.index(name) for name in feature_names]
 
-    feature_comment = "\n".join(
-        f"//   [{i:2d}] {name}" for i, name in enumerate(feature_names)
-    )
     names_array = _wrap([f'"{n}"' for n in feature_names], 4)
 
     selftest_blocks = []
     for index, (vector, expected) in enumerate(selftest):
         literals = _wrap([_float_literal(v) for v in vector], 6, indent="        ")
         selftest_blocks.append(
-            f"    // vector {index}\n    {{\n{literals}\n    }}"
+            f"    {{\n{literals}\n    }}"
         )
     selftest_vectors = ",\n".join(selftest_blocks)
     selftest_expected = _wrap([_float_literal(p) for _, p in selftest], 4)
 
-    metrics_comment = "\n".join(f"//   {k}: {v}" for k, v in metadata.items())
-
-    return f"""// clang-format off
-// =============================================================================
-//  RandomForest.h - generated by ml_pipeline/export_model.py. DO NOT EDIT.
-// =============================================================================
-//  Generated : {generated}
-//  Axis set  : {axis_set}
-//  Features  : {len(feature_names)}
-//  Trees     : {flat.n_trees} (max depth {flat.max_depth})
-//  Nodes     : {flat.n_nodes} ({flat.n_leaves} leaves)
-//  Flash     : ~{flat.flash_bytes() / 1024.0:.1f} KiB of const tables
-//
-//  Leave-One-Subject-Out performance of this configuration:
-{metrics_comment}
-//
-//  The forest is stored as flat arrays and walked by an interpreter, so
-//  RandomForest::predictProba() reproduces scikit-learn's
-//  predict_proba(X)[:, 1] exactly (mean of per-leaf class distributions).
-//
-//  Feature vector layout expected by predict*(), see features_order.json:
-{feature_comment}
-// =============================================================================
-
-#pragma once
-
+    return f"""#pragma once
 #include <cstddef>
 #include <cstdint>
 
-// Set to 0 to drop the feature-name table and the self-test vectors from flash.
 #ifndef RF_INCLUDE_METADATA
 #define RF_INCLUDE_METADATA 1
 #endif
@@ -326,28 +218,22 @@ constexpr std::size_t kTreeCount = {flat.n_trees};
 constexpr std::size_t kNodeCount = {flat.n_nodes};
 constexpr std::uint8_t kLeafSentinel = {LEAF_SENTINEL};
 
-// The feature extractor always produces the full 53-value pipeline vector.
-// kSourceIndex maps model input i -> pipeline vector index, so a reduced model
-// (e.g. the 6-DoF acc_gyro export) drops in without touching the firmware.
 constexpr std::size_t kPipelineFeatureCount = {len(FEATURE_NAMES)};
 
 static const std::uint8_t kSourceIndex[kFeatureCount] = {{
 {_wrap([str(v) for v in source_indices], 20)}
 }};
 
-/// Gather the model's inputs from the full pipeline feature vector.
 inline void gather(const float *pipelineFeatures, float *modelInput) {{
     for (std::size_t i = 0; i < kFeatureCount; ++i) {{
         modelInput[i] = pipelineFeatures[kSourceIndex[i]];
     }}
 }}
 
-// Split feature per node; kLeafSentinel marks a leaf.
 static const std::uint8_t kFeature[kNodeCount] = {{
 {_wrap([str(v) for v in flat.features], 24)}
 }};
 
-// Split threshold for internal nodes; P(class = 1) for leaves.
 static const float kThreshold[kNodeCount] = {{
 {_wrap([_float_literal(v) for v in flat.thresholds], 8)}
 }};
@@ -364,7 +250,6 @@ static const std::uint16_t kRoot[kTreeCount] = {{
 {_wrap([str(v) for v in flat.roots], 16)}
 }};
 
-/// Walk one tree and return the leaf's P(class = 1).
 inline float treeProba(std::size_t tree, const float *x) {{
     std::uint16_t node = kRoot[tree];
     while (kFeature[node] != kLeafSentinel) {{
@@ -373,7 +258,6 @@ inline float treeProba(std::size_t tree, const float *x) {{
     return kThreshold[node];
 }}
 
-/// Mean P(fall) over the forest - equivalent to sklearn predict_proba[:, 1].
 inline float predictProba(const float *x) {{
     float total = 0.0f;
     for (std::size_t tree = 0; tree < kTreeCount; ++tree) {{
@@ -382,7 +266,6 @@ inline float predictProba(const float *x) {{
     return total / static_cast<float>(kTreeCount);
 }}
 
-/// Number of trees whose own leaf probability favours "fall" (majority votes).
 inline std::uint16_t voteCount(const float *x) {{
     std::uint16_t votes = 0;
     for (std::size_t tree = 0; tree < kTreeCount; ++tree) {{
@@ -393,7 +276,6 @@ inline std::uint16_t voteCount(const float *x) {{
     return votes;
 }}
 
-/// Thresholded decision. Pass the operating point chosen from the LOSO sweep.
 inline bool predict(const float *x, float threshold) {{
     return predictProba(x) >= threshold;
 }}
@@ -414,7 +296,6 @@ static const float kSelfTestExpected[kSelfTestCount] = {{
 {selftest_expected}
 }};
 
-/// Verifies the flashed tables against probabilities computed by scikit-learn.
 inline bool selfTest(float tolerance = 1e-4f) {{
     for (std::size_t i = 0; i < kSelfTestCount; ++i) {{
         const float got = predictProba(kSelfTestInput[i]);
@@ -427,17 +308,10 @@ inline bool selfTest(float tolerance = 1e-4f) {{
     return true;
 }}
 
-#endif  // RF_INCLUDE_METADATA
+#endif
 
-}}  // namespace RandomForest
-// clang-format on
+}}
 """
-
-
-# --------------------------------------------------------------------------- #
-# Orchestration
-# --------------------------------------------------------------------------- #
-
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -459,7 +333,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--no-write", action="store_true", help="report without writing files")
     return parser.parse_args(argv)
-
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
@@ -519,7 +392,6 @@ def main(argv: list[str] | None = None) -> int:
         f"~{flat.flash_bytes() / 1024.0:.1f} KiB of const tables"
     )
 
-    # Parity against scikit-learn over the whole dataset.
     sk_proba = forest.predict_proba(X)[:, 1]
     flat_proba = np.array([flat.predict_proba(row) for row in X])
     max_diff = float(np.abs(sk_proba - flat_proba).max())
@@ -527,7 +399,6 @@ def main(argv: list[str] | None = None) -> int:
     if max_diff > 1e-6:
         raise SystemExit("flattened forest does not reproduce sklearn probabilities")
 
-    # Self-test vectors: one confident ADL, one confident fall, one borderline.
     order = np.argsort(sk_proba)
     picks = [order[0], order[-1], order[len(order) // 2]][:N_SELFTEST_VECTORS]
     selftest = [(X[i].astype(np.float32), float(sk_proba[i])) for i in picks]
@@ -580,7 +451,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {sweep_path}")
 
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
