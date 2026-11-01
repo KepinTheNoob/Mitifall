@@ -32,27 +32,16 @@ volatile std::uint8_t gLastReason = 0;
 volatile bool gReasonPending = false;
 bool gEventHooked = false;
 
-// One failure line per attempt: the driver emits several disconnect events per
-// association attempt and the log becomes unreadable otherwise.
 std::uint32_t gReportedFailureForAttempt = 0;
 
-// Strongest matching AP seen during the startup scan. Associating directly to a
-// known BSSID and channel skips the full-channel scan, which is markedly more
-// reliable in a congested band.
 bool gHaveBssid = false;
 std::uint8_t gBssid[6] = {0};
 std::int32_t gChannel = 0;
 
-// Radio region. Indonesia, like most of the world outside North America, allows
-// 2.4 GHz channels 1-13, and phone hotspots frequently auto-select 12 or 13. The
-// policy is MANUAL so the setting cannot be narrowed by country info advertised
-// by some other AP.
 constexpr char kCountryCode[] = "ID";
 constexpr std::uint8_t kFirstChannel = 1;
 constexpr std::uint8_t kChannelCount = 13;
 
-// Every Nth consecutive "no AP found" (reason 201) triggers a background rescan,
-// so the log shows what the radio can hear right now instead of only at boot.
 constexpr std::uint32_t kRescanEveryNotFound = 3;
 constexpr std::uint32_t kRescanTimeoutMs = 8000;
 
@@ -62,8 +51,6 @@ std::uint32_t gRescanStartedMs = 0;
 
 bool empty(const char *text) { return text == nullptr || text[0] == '\0'; }
 
-/// Same SSID ignoring case and leading/trailing whitespace - the usual reason a
-/// network that is clearly "there" never matches.
 bool nearMatch(const String &seen, const char *wanted) {
     String a = seen;
     String b = wanted == nullptr ? "" : wanted;
@@ -72,7 +59,6 @@ bool nearMatch(const String &seen, const char *wanted) {
     return a.length() > 0 && a.equalsIgnoreCase(b);
 }
 
-/// True when the configured network is open (no passphrase).
 bool isOpenNetwork() { return empty(gPassword); }
 
 void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
@@ -112,13 +98,9 @@ void prepareRadio() {
         WiFi.onEvent(onWifiEvent);
         gEventHooked = true;
     }
-    // Let update() own all retry timing. With the driver's own auto-reconnect
-    // enabled as well, the two fight: it re-associates underneath us while we are
-    // issuing begin(), which shows up as a burst of AUTH_EXPIRE (reason 2) events
-    // for a single logical attempt.
+
     WiFi.setAutoReconnect(false);
 
-    // Channels 1-13, fixed. Must run after WiFi.mode() has started the driver.
     wifi_country_t country = {};
     std::strncpy(country.cc, kCountryCode, sizeof(country.cc));
     country.schan = kFirstChannel;
@@ -126,9 +108,6 @@ void prepareRadio() {
     country.policy = WIFI_COUNTRY_POLICY_MANUAL;
     const esp_err_t countryErr = esp_wifi_set_country(&country);
 
-    // Known workaround for the ESP32-C3 SuperMini / LOLIN C3 Mini antenna layout:
-    // at full TX power these boards often fail to scan or associate. Applied here
-    // so the startup scan uses it too, not only the connection attempts.
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
     if (gLog != nullptr) {
@@ -139,8 +118,7 @@ void prepareRadio() {
     }
 
     if (gOptions.disableSleep) {
-        // Modem sleep adds up to ~100 ms of latency to every publish; the power
-        // saving is not worth it while streaming telemetry.
+
         WiFi.setSleep(false);
     }
 }
@@ -160,15 +138,14 @@ void attempt() {
     }
 }
 
-}  // namespace
+}
 
 const char *modeName() { return gMode == Mode::Psk ? "WPA2-PSK" : "disabled"; }
 
 std::uint8_t lastDisconnectReason() { return gLastReason; }
 
 const char *disconnectReasonName(std::uint8_t reason) {
-    // Values from esp_wifi_types.h (wifi_err_reason_t). Only the ones that
-    // actually show up during bring-up are named individually.
+
     switch (reason) {
         case 1:
             return "unspecified";
@@ -199,8 +176,6 @@ const char *disconnectReasonName(std::uint8_t reason) {
     }
 }
 
-/// Print every network from a completed scan and return how many match `ssid`.
-/// The full list is the point: it separates "wrong name" from "can't hear it".
 static int reportScanResults(Stream &out, const char *ssid, int found) {
     if (found <= 0) {
         out.println("WiFi:   nothing heard at all - antenna, power supply or RF problem");
@@ -247,8 +222,7 @@ void logVisibleNetworks(Stream &out, const char *ssid) {
     WiFi.scanDelete();
 
     if (matches == 0) {
-        // Phone hotspots can be slow to answer probe requests; a passive scan
-        // with a long dwell listens for beacons instead.
+
         out.println("WiFi: not found, retrying with a passive 500 ms/channel scan...");
         matches = reportScanResults(out, ssid, WiFi.scanNetworks(false, true, true, 500));
         WiFi.scanDelete();
@@ -261,7 +235,6 @@ void logVisibleNetworks(Stream &out, const char *ssid) {
     }
 }
 
-/// Start a non-blocking rescan; update() collects the results.
 static void startBackgroundRescan() {
     if (gRescanRunning) {
         return;
@@ -276,8 +249,6 @@ static void startBackgroundRescan() {
     }
 }
 
-/// Poll the background rescan. Returns true while it is still running, so the
-/// caller holds off on new association attempts (the two would collide).
 static bool serviceBackgroundRescan() {
     if (!gRescanRunning) {
         return false;
@@ -353,8 +324,6 @@ void update() {
     }
     gWasConnected = connected;
 
-    // Surface the driver's reason code: this is what separates "wrong password"
-    // (15) from "SSID not found" (201).
     if (gReasonPending) {
         gReasonPending = false;
         const std::uint8_t reason = gLastReason;
@@ -364,8 +333,6 @@ void update() {
                          disconnectReasonName(reason));
         }
 
-        // Repeated "no AP found": look again, in the background, so the log shows
-        // whether the AP ever becomes audible (hotspot waking up, board moved).
         if (!connected && reason == 201) {
             ++gConsecutiveNotFound;
             if (gConsecutiveNotFound % kRescanEveryNotFound == 0) {
@@ -380,7 +347,6 @@ void update() {
         gConsecutiveNotFound = 0;
     }
 
-    // A scan and an association attempt cannot run at the same time.
     if (serviceBackgroundRescan()) {
         return;
     }
@@ -406,4 +372,4 @@ bool consumeJustConnected() {
 
 std::uint32_t reconnectCount() { return gReconnects; }
 
-}  // namespace WifiLink
+}

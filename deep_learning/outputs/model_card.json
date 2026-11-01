@@ -1,0 +1,243 @@
+{
+  "name": "mitifall_fall_dl",
+  "created_utc": "2026-10-31T09:19:59+00:00",
+  "versions": {
+    "torch": "2.15.0+cpu",
+    "onnx": "1.23.2",
+    "onnxruntime": "1.31.1"
+  },
+  "onnx": {
+    "file": "mitifall_fall_dl.onnx",
+    "sha256": "a895d502eb7588b017dd93804cefd4af336faf75fa4f3af014df9a9c3eb7085d",
+    "bytes": 252477,
+    "opset": 18,
+    "exporter": "torch.export (dynamo)"
+  },
+  "onnx_int8": {
+    "file": "mitifall_fall_dl.int8.onnx",
+    "sha256": "d6f94e4a122377d67d2355cf7a438ef05c9ba6f567e48d1e7be8376b48948b2c",
+    "bytes": 134057,
+    "quantization": "static QDQ, per-channel int8 weights, int8 activations; Conv/MatMul/Gemm only",
+    "calibration_windows": 512,
+    "max_abs_diff_vs_fp32": 0.4352855086326599,
+    "mean_abs_diff_vs_fp32": 0.014036118984222412,
+    "decision_agreement_vs_fp32": 0.9906020861303315,
+    "roc_auc_in_sample_fp32": 0.9756115399556736,
+    "roc_auc_in_sample_int8": 0.9750483679736964,
+    "latency_ms_batch1_1thread": 0.1083845018001739
+  },
+  "input": {
+    "name": "window",
+    "dtype": "float32",
+    "shape": [
+      "batch",
+      6,
+      100
+    ],
+    "channels": [
+      "ax",
+      "ay",
+      "az",
+      "gx",
+      "gy",
+      "gz"
+    ],
+    "units": {
+      "ax": "g",
+      "ay": "g",
+      "az": "g",
+      "gx": "deg/s",
+      "gy": "deg/s",
+      "gz": "deg/s"
+    }
+  },
+  "output": {
+    "name": "p_fall",
+    "dtype": "float32",
+    "shape": [
+      "batch"
+    ],
+    "meaning": "probability that the 2.0 s window belongs to a fall recording"
+  },
+  "preprocessing": {
+    "sample_rate_hz": 50,
+    "resampling": "linear interpolation onto a uniform 20 ms grid starting at the first sample",
+    "lowpass": {
+      "type": "butterworth",
+      "order": 2,
+      "cutoff_hz": 8.0,
+      "causal": true,
+      "initial_state": "steady state at the first sample (scipy lfilter_zi)",
+      "applies_to": [
+        "ax",
+        "ay",
+        "az",
+        "gx",
+        "gy",
+        "gz"
+      ]
+    },
+    "window_samples": 100,
+    "hop_samples": 50,
+    "dh_m": null,
+    "derived_in_graph": [
+      "acc_mag = |a|",
+      "tilt_deg = acos(az / |a|)",
+      "robust scaler"
+    ]
+  },
+  "decision": {
+    "threshold": 0.59,
+    "source": "Youden's J on validation subjects 5, 15, 17"
+  },
+  "model": {
+    "arch": "cnn_bilstm",
+    "ensemble": 1,
+    "model_channels": [
+      "ax",
+      "ay",
+      "az",
+      "acc_mag",
+      "tilt_deg",
+      "gx",
+      "gy",
+      "gz",
+      "gyr_mag"
+    ],
+    "parameters": 41346,
+    "macs_per_window": 1276160,
+    "config": {
+      "arch": "cnn_bilstm",
+      "channels": 32,
+      "levels": 3,
+      "kernel": 5,
+      "dropout": 0.15,
+      "heads": 2,
+      "lstm_hidden": 32
+    }
+  },
+  "training": {
+    "dataset": "UMAFall wrist (via ml_pipeline feature table, file-level labels)",
+    "validation_subjects": [
+      5,
+      15,
+      17
+    ],
+    "validation_metrics": {
+      "accuracy": 0.905899925317401,
+      "f1_macro": 0.9014999719762358,
+      "f1_fall": 0.8806818181818181,
+      "f1_adl": 0.9223181257706535,
+      "sensitivity": 0.8724202626641651,
+      "specificity": 0.9280397022332506,
+      "precision": 0.8891013384321224,
+      "balanced_accuracy": 0.9002299824487079,
+      "roc_auc": 0.9566268930488502,
+      "pr_auc": 0.9385567072194226
+    },
+    "best_epoch": 7,
+    "train_config": {
+      "epochs": 60,
+      "batch_size": 128,
+      "lr": 0.002,
+      "weight_decay": 0.0001,
+      "patience": 10,
+      "lr_patience": 4,
+      "lr_factor": 0.5,
+      "min_lr": 1e-05,
+      "loss": "focal",
+      "focal_gamma": 2.0,
+      "threads": 4
+    },
+    "augment_config": {
+      "enabled": true,
+      "p_jitter": 0.5,
+      "jitter_sigma_g": 0.02,
+      "p_scale": 0.5,
+      "scale_low": 0.7,
+      "scale_high": 1.15,
+      "gravity_window": 25,
+      "p_warp": 0.4,
+      "warp_sigma": 0.15,
+      "warp_knots": 4,
+      "p_rotate": 0.5,
+      "rotate_max_deg": 12.0
+    },
+    "seeds": [
+      42
+    ]
+  },
+  "benchmark": {
+    "tag": "cnn_bilstm_gyro_9680000d",
+    "report": "deep_learning/outputs/benchmark/cnn_bilstm_gyro_9680000d/report.md",
+    "protocol": "LOSO, 19 folds, 15 train / 3 validation subjects per fold, pooled test windows",
+    "rows": [
+      {
+        "model": "ml_inference RF @ 0.30 (deployed)",
+        "accuracy": 0.8421976660125994,
+        "f1_macro": 0.8160116235459377,
+        "f1_fall": 0.7466003316749587,
+        "f1_adl": 0.8854229154169168,
+        "sensitivity": 0.8371141688359985,
+        "specificity": 0.8441521303974836,
+        "precision": 0.6737503741394792,
+        "balanced_accuracy": 0.8406331496167411,
+        "roc_auc": 0.9058476303282004,
+        "pr_auc": 0.8538922022664129,
+        "soft_fall_sensitivity": 0.9142857142857143,
+        "tp": 2251,
+        "fp": 1090,
+        "tn": 5904,
+        "fn": 438
+      },
+      {
+        "model": "ml_inference RF @ val-tuned",
+        "accuracy": 0.8765878343488588,
+        "f1_macro": 0.8461311840003457,
+        "f1_fall": 0.7776744186046511,
+        "f1_adl": 0.9145879493960403,
+        "sensitivity": 0.7772406098921533,
+        "specificity": 0.9147841006577067,
+        "precision": 0.7781087118391661,
+        "balanced_accuracy": 0.8460123552749299,
+        "roc_auc": 0.9058476303282004,
+        "pr_auc": 0.8538922022664129,
+        "soft_fall_sensitivity": 0.7714285714285715,
+        "tp": 2090,
+        "fp": 596,
+        "tn": 6398,
+        "fn": 599
+      },
+      {
+        "model": "deep_learning CNN-BILSTM +gyro @ val-tuned",
+        "accuracy": 0.8804089641639987,
+        "f1_macro": 0.850809808388989,
+        "f1_fall": 0.7843575418994414,
+        "f1_adl": 0.9172620748785366,
+        "sensitivity": 0.7831907772406099,
+        "specificity": 0.9177866742922505,
+        "precision": 0.7855277881387542,
+        "balanced_accuracy": 0.8504887257664302,
+        "roc_auc": 0.9277839805951719,
+        "pr_auc": 0.8665296658654313,
+        "soft_fall_sensitivity": 0.7571428571428571,
+        "tp": 2106,
+        "fp": 575,
+        "tn": 6419,
+        "fn": 583
+      }
+    ]
+  },
+  "parity": {
+    "windows": 9683,
+    "max_abs_diff": 3.5762786865234375e-07,
+    "max_abs_diff_batch1": 1.7881393432617188e-07,
+    "decision_agreement": 1.0,
+    "latency_ms_batch1_1thread": 0.09963799857359845
+  },
+  "limitations": [
+    "Trained on UMAFall wrist data resampled from ~20 Hz; not yet validated on Mitifall hardware recordings.",
+    "Labels are file-level: every window of a fall recording counts as Fall.",
+    "No barometer channel unless trained with --with-baro on recordings that have pressure."
+  ]
+}

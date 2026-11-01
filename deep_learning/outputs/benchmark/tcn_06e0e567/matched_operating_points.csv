@@ -1,0 +1,5 @@
+baseline,metric,rf,dl,delta,ci_low,ci_high,verdict
+ml_inference RF @ 0.30 (deployed),sensitivity at equal specificity,0.8371141688359985,0.8627742655262179,0.025660096690219403,-0.02544641288646679,0.07039059690758716,no clear difference
+ml_inference RF @ 0.30 (deployed),specificity at equal sensitivity,0.8441521303974836,0.8798970546182442,0.03574492422076059,-0.0457756293335988,0.07487944146615129,no clear difference
+ml_inference RF @ val-tuned,sensitivity at equal specificity,0.7772406098921533,0.788025288211231,0.0107846783190777,-0.07228502032997118,0.060243189502586884,no clear difference
+ml_inference RF @ val-tuned,specificity at equal sensitivity,0.9147841006577067,0.9210752073205605,0.006291106662853818,-0.03571225071225076,0.03314388317750559,no clear difference

@@ -5,8 +5,8 @@
 namespace FeatureExtractor {
 namespace {
 
-constexpr std::size_t kAccBase = 0;  // Ax, Ay, Az
-constexpr std::size_t kGyrBase = 3;  // Gx, Gy, Gz
+constexpr std::size_t kAccBase = 0;
+constexpr std::size_t kGyrBase = 3;
 
 const char *const kFeatureNames[kFeatureCount] = {
     "Ax_mean", "Ax_std", "Ax_min", "Ax_max", "Ax_var",
@@ -35,7 +35,7 @@ inline float absSum3(const float *sample, std::size_t base) {
            std::fabs(sample[base + 2]);
 }
 
-}  // namespace
+}
 
 const char *featureName(std::size_t index) {
     return index < kFeatureCount ? kFeatureNames[index] : "";
@@ -59,7 +59,6 @@ void compute(const float *(*fetch)(const void *source, std::size_t index),
     float accMagSum = 0.0f, accMagMax = 0.0f, accAbsSum = 0.0f;
     float gyrMagSum = 0.0f, gyrMagMax = 0.0f, gyrAbsSum = 0.0f;
 
-    // Pass 1: sums, extrema and the magnitude/SMA accumulators.
     for (std::size_t i = 0; i < sampleCount; ++i) {
         const float *sample = fetch(source, i);
 
@@ -96,10 +95,6 @@ void compute(const float *(*fetch)(const void *source, std::size_t index),
     const float accMagMean = accMagSum * inverseCount;
     const float gyrMagMean = gyrMagSum * inverseCount;
 
-    // Pass 2: squared deviations about the mean. A second pass costs one more
-    // sweep of 100 samples but avoids the catastrophic cancellation that
-    // E[x^2] - E[x]^2 suffers in float when the mean dwarfs the deviation -
-    // exactly the case for magnetometer axes with large hard-iron offsets.
     float squaredDeviation[kAxisCount] = {0};
     float accMagSquaredDeviation = 0.0f;
     float gyrMagSquaredDeviation = 0.0f;
@@ -119,8 +114,6 @@ void compute(const float *(*fetch)(const void *source, std::size_t index),
         gyrMagSquaredDeviation += gyrDeviation * gyrDeviation;
     }
 
-    // Emit in the pipeline's order. Population variance (ddof = 0), matching
-    // numpy's default and the training-time feature definition.
     std::size_t out = 0;
     for (std::size_t axis = 0; axis < kAxisCount; ++axis) {
         const float variance = squaredDeviation[axis] * inverseCount;
@@ -139,8 +132,8 @@ void compute(const float *(*fetch)(const void *source, std::size_t index),
     features[out++] = gyrMagMean;
     features[out++] = std::sqrt(gyrMagSquaredDeviation * inverseCount);
 
-    features[out++] = accAbsSum * inverseCount;  // acc_sma
-    features[out++] = gyrAbsSum * inverseCount;  // gyr_sma
+    features[out++] = accAbsSum * inverseCount;
+    features[out++] = gyrAbsSum * inverseCount;
 }
 
-}  // namespace FeatureExtractor
+}

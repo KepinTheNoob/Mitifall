@@ -1,0 +1,17 @@
+baseline,metric,delta_mean,ci_low,ci_high,verdict
+ml_inference RF @ 0.30 (deployed),accuracy,0.024403007016338126,-0.0037190543658014823,0.046236586831028235,no clear difference
+ml_inference RF @ 0.30 (deployed),f1_macro,0.019771343771718315,-0.011988842428870283,0.04523192126003773,no clear difference
+ml_inference RF @ 0.30 (deployed),f1_fall,0.018210830347770435,-0.02600862756311643,0.0554942637103427,no clear difference
+ml_inference RF @ 0.30 (deployed),sensitivity,-0.05907512598492913,-0.12321216122293643,0.0026323653105492415,no clear difference
+ml_inference RF @ 0.30 (deployed),specificity,0.0560231647156197,0.020597711794100096,0.08451054447468671,DL higher
+ml_inference RF @ 0.30 (deployed),roc_auc,0.02027959942711861,-0.006645978005088449,0.04280342993716862,no clear difference
+ml_inference RF @ 0.30 (deployed),pr_auc,0.010305961266302443,-0.03081200359161232,0.04355321616771764,no clear difference
+ml_inference RF @ 0.30 (deployed),soft_fall_sensitivity,-0.033765387669437714,-0.09722222222222221,0.03125,no clear difference
+ml_inference RF @ val-tuned,accuracy,-0.010791821234428442,-0.03598158549423327,0.007697324825018807,no clear difference
+ml_inference RF @ val-tuned,f1_macro,-0.011485700658647688,-0.04271776284049762,0.009994606023736754,no clear difference
+ml_inference RF @ val-tuned,f1_fall,-0.014763815947770634,-0.06020645162548767,0.015367503180926712,no clear difference
+ml_inference RF @ val-tuned,sensitivity,4.466401784356366e-05,-0.05848827044724876,0.05081404970872635,no clear difference
+ml_inference RF @ val-tuned,specificity,-0.014726908983442265,-0.04505924798093468,0.00904344224477806,no clear difference
+ml_inference RF @ val-tuned,roc_auc,0.02027959942711861,-0.006645978005088449,0.04280342993716862,no clear difference
+ml_inference RF @ val-tuned,pr_auc,0.010305961266302443,-0.03081200359161232,0.04355321616771764,no clear difference
+ml_inference RF @ val-tuned,soft_fall_sensitivity,0.10595155806645039,0.014482547458665097,0.1968125402965828,DL higher

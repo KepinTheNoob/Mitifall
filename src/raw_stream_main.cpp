@@ -1,31 +1,3 @@
-// =============================================================================
-//  raw_stream_main.cpp - 50 Hz 9-DoF logger + Adafruit IO telemetry
-//                                                        [env:raw_stream]
-// =============================================================================
-//  pio run -e raw_stream -t upload -t monitor
-//
-//  Local: one CSV line per sample over USB CDC, same units and column order as
-//  dataset/processed/, so a capture can go straight into the Python pipeline:
-//
-//    Timestamp_ms,Ax,Ay,Az,Gx,Gy,Gz,Mx,My,Mz
-//
-//  Capture with:  pio device monitor -e raw_stream --quiet > capture.csv
-//
-//  Cloud: Adafruit IO over plain MQTT (PubSubClient)
-//    publish   {user}/feeds/accel-mag        mean |a| over the window   -> chart
-//    publish   {user}/feeds/fall-detected    1 on detection, 0 on clear -> LED
-//    publish   {user}/feeds/fall-tilt        posture change on a fall   -> gauge
-//    publish   {user}/feeds/fall-log         timestamped incident text  -> stream
-//    publish   {user}/feeds/device-status    ONLINE on connect, LWT     -> text
-//    subscribe {user}/feeds/buzzer-command   dashboard toggle           -> buzzer
-//
-//  Only accel-mag is periodic; everything else is published on an event.
-//
-//  Sampling is the priority: WiFi and MQTT work is only ever done between
-//  samples, and the network never gates acquisition or CSV output. Events raised
-//  on the sampling path are queued and sent in the gap between samples.
-// =============================================================================
-
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
@@ -36,7 +8,9 @@
 
 #include "adafruit_io_config.h"
 #include "alarm_manager.h"
+#include "barometer.h"
 #include "board_config.h"
+#include "device_log.h"
 #include "sensor_hub.h"
 #include "threshold_detector.h"
 #include "wifi_link.h"
@@ -46,37 +20,36 @@ namespace {
 using namespace BoardConfig;
 using namespace AdafruitIoConfig;
 
-// Set false for a pure CSV capture with no '#' preamble or status lines.
 constexpr bool kPrintBanner = true;
 
-// Set false to run purely local (no WiFi, no MQTT), e.g. for bench logging.
+#ifdef MITIFALL_DL_STREAM
+constexpr bool kDlStream = true;
+#else
+constexpr bool kDlStream = false;
+#endif
+
+constexpr bool kStreamCsvInRawStream = false;
+constexpr bool kStreamCsv = kDlStream || kStreamCsvInRawStream;
+
 constexpr bool kEnableCloud = true;
 
-// Rule-based fall detection. Independent of the Random Forest: this target
-// contains no model, only the threshold cascade in threshold_detector.cpp.
-constexpr bool kEnableFallDetection = true;
+constexpr bool kEnableFallDetection = !kDlStream;
 
-// Log every impact candidate and why it was rejected. Impacts are rare enough
-// that this stays readable, and it is how you tune the thresholds on real motion.
+constexpr std::uint32_t kDeviceLogIntervalMs = 2500;
+
+constexpr const char *kCsvHeader =
+    "Timestamp_ms,Ax,Ay,Az,Gx,Gy,Gz,Mx,My,Mz,Pressure_hPa,Altitude_m,AltitudeDiff_m";
+
 constexpr bool kLogCandidates = true;
 
-// Sensitivity preset applied at boot. Numbers are the LOSO-validated
-// recording-level scores from the UMAFall wrist data (see README 9.4).
-//
-//   0  shipped default   impact 3.2 g, std 0.50  -> sens 0.856  spec 0.942
-//   1  sensitive         impact 2.6 g, std 0.50  -> sens 0.933  spec 0.913
-//   2  strict            impact 3.0 g, std 0.32  -> sens 0.827  spec 0.954
-//   3  bench testing     impact 1.8 g, tilt 15 deg - fires easily by hand,
-//                        NOT for real use: far too many false alarms
 constexpr int kSensitivityPreset = 3;
 
 ThresholdDetector::Detector gDetector;
 
-// Diagnostics: how far the real motion gets through the cascade.
 std::uint32_t gImpactCount = 0;
 std::uint32_t gRejectCount = 0;
-float gPeakAccelG = 0.0f;   // since the last status line
-float gSessionPeakG = 0.0f;  // since boot
+float gPeakAccelG = 0.0f;
+float gSessionPeakG = 0.0f;
 
 WiFiClient gTcp;
 PubSubClient gMqtt(gTcp);
@@ -92,28 +65,49 @@ std::uint32_t gPublishCount = 0;
 std::uint32_t gFallCount = 0;
 bool gFallDetectedPublished = false;
 
-// An incident opens on FALL DETECTED and closes when the wearer presses the
-// GPIO3 button. The alert itself is only 0.5 s, so tying the dismissal to the
-// actuators still running would almost never log one.
 bool gIncidentOpen = false;
 
-// device-status Last Will. Cleared if the broker refuses a CONNECT carrying it.
 bool gWillEnabled = true;
 std::uint8_t gWillFailures = 0;
 
 bool gTimeSyncStarted = false;
 
-// kEnableCloud AND credentials actually present in secrets.h.
 bool gCloudActive = false;
 
-// ---------------------------------------------------------------------------
-// Event queue for the edge-triggered feeds (fall-tilt, fall-log)
-// ---------------------------------------------------------------------------
-// Filled on the sampling path or while MQTT is down, drained between samples.
-// Payloads are formatted when the event happens, so a delayed delivery still
-// carries the correct time.
+std::uint32_t gPublishSlot = 0;
+std::uint8_t gBaroFeedIndex = 0;
+
+float gAltDiffPeakM = 0.0f;
+bool gAltDiffPeakValid = false;
+
+float gStatusAltDiffPeakM = 0.0f;
+
+bool baroAltitudeValid() {
+    if (!Barometer::ready()) {
+        return false;
+    }
+    const BaroMath::AltitudeTracker &t = Barometer::tracker();
+    return t.calibrated() && !t.calibrating();
+}
+
+bool baroTelemetryActive() { return kPublishBarometer && Barometer::ready(); }
+
+void onBaroSample() {
+    if (!baroAltitudeValid()) {
+        return;
+    }
+    const float dh = Barometer::tracker().altitudeDiffM();
+    if (!gAltDiffPeakValid || std::fabs(dh) > std::fabs(gAltDiffPeakM)) {
+        gAltDiffPeakM = dh;
+        gAltDiffPeakValid = true;
+    }
+    if (std::fabs(dh) > std::fabs(gStatusAltDiffPeakM)) {
+        gStatusAltDiffPeakM = dh;
+    }
+}
+
 struct PendingEvent {
-    const char *topic;  // one of the AIO_FEED_* string literals
+    const char *topic;
     char payload[64];
 };
 
@@ -122,9 +116,6 @@ std::size_t gEventHead = 0;
 std::size_t gEventCount = 0;
 std::uint32_t gEventsDropped = 0;
 
-// ---------------------------------------------------------------------------
-// Rolling |a| statistics for the publish window (Welford, single pass)
-// ---------------------------------------------------------------------------
 struct MagnitudeStats {
     std::uint32_t count = 0;
     float mean = 0.0f;
@@ -149,13 +140,27 @@ struct MagnitudeStats {
 };
 
 MagnitudeStats gWindow;
+MagnitudeStats gAccelMagWindow;
+MagnitudeStats gLogWindow;
+std::uint32_t gLastLogMs = 0;
 
-// ---------------------------------------------------------------------------
-// Timestamps and event publishing
-// ---------------------------------------------------------------------------
+void logDeviceRow(const char *event) {
+    DeviceLog::Row row;
+    row.event = event;
+    row.hasAccel = gLogWindow.count > 0;
+    row.accelMag = gLogWindow.mean;
+    row.alarm = AlarmManager::isAlerting();
+    if (Barometer::ready() && Barometer::tracker().sampleCount() > 0) {
+        row.hasPressure = true;
+        row.pressureHpa = Barometer::pressureHpa();
+        if (baroAltitudeValid()) {
+            row.hasAltitude = true;
+            row.altitudeM = Barometer::tracker().altitudeM();
+        }
+    }
+    DeviceLog::add(row);
+}
 
-/// "2026-09-30 14:03:12 WIB" once SNTP has set the clock, "uptime 00:12:34"
-/// before that. Never blocks.
 void formatTimestamp(char *out, std::size_t size) {
     const std::time_t now = std::time(nullptr);
     std::tm local{};
@@ -168,10 +173,9 @@ void formatTimestamp(char *out, std::size_t size) {
     snprintf(out, size, "uptime %02lu:%02lu:%02lu", up / 3600UL, (up / 60UL) % 60UL, up % 60UL);
 }
 
-/// Queue a payload for `topic`. Drained by flushEvents() between samples.
 void queueEvent(const char *topic, const char *payload) {
     if (gEventCount == kEventQueueCapacity) {
-        // Full: drop the oldest so the most recent incident is never lost.
+
         gEventHead = (gEventHead + 1) % kEventQueueCapacity;
         --gEventCount;
         ++gEventsDropped;
@@ -187,7 +191,6 @@ void queueEvent(const char *topic, const char *payload) {
     }
 }
 
-/// Publish queued events in order. Stops at the first failure and retries later.
 void flushEvents() {
     while (gEventCount > 0 && gMqtt.connected()) {
         const PendingEvent &next = gEventQueue[gEventHead];
@@ -203,7 +206,6 @@ void flushEvents() {
     }
 }
 
-/// Timestamped incident line for the fall-log feed.
 void logIncident(const char *what) {
     char stamp[32];
     formatTimestamp(stamp, sizeof(stamp));
@@ -212,19 +214,14 @@ void logIncident(const char *what) {
     queueEvent(AIO_FEED_FALL_LOG, line);
 }
 
-/// Posture change measured by cascade stage 3 for a confirmed fall.
 void reportFallTilt(float tiltDeg) {
     char value[16];
     snprintf(value, sizeof(value), "%.1f", tiltDeg);
     queueEvent(AIO_FEED_FALL_TILT, value);
 }
 
-// ---------------------------------------------------------------------------
-// MQTT
-// ---------------------------------------------------------------------------
-
 void onMqttMessage(char *topic, std::uint8_t *payload, unsigned int length) {
-    // Payloads are tiny ("ON"/"OFF"/"1"/"0"); bound the copy regardless.
+
     char text[16];
     const unsigned int copied = length < sizeof(text) - 1 ? length : sizeof(text) - 1;
     memcpy(text, payload, copied);
@@ -253,7 +250,6 @@ void onMqttMessage(char *topic, std::uint8_t *payload, unsigned int length) {
     }
 }
 
-/// One bounded connection attempt. Returns true when the broker is up.
 bool serviceMqtt() {
     if (gMqtt.connected()) {
         gMqtt.loop();
@@ -268,7 +264,6 @@ bool serviceMqtt() {
     }
     gLastMqttAttemptMs = millis();
 
-    // Client id must be unique per connection; the MAC keeps it stable per board.
     char clientId[32];
     snprintf(clientId, sizeof(clientId), "mitifall-%06llX",
              static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFULL));
@@ -277,9 +272,6 @@ bool serviceMqtt() {
         Serial.printf("# mqtt connecting to %s:%d as %s\n", AIO_SERVER, AIO_PORT, clientId);
     }
 
-    // Register the device-status Last Will on every CONNECT. After repeated
-    // failures with it, try one CONNECT without it, so a broker that refuses
-    // wills can never take MQTT down entirely.
     const bool probeWithoutWill = gWillEnabled && gWillFailures >= kWillFailuresBeforeFallback;
     const bool useWill = gWillEnabled && !probeWithoutWill;
 
@@ -290,7 +282,7 @@ bool serviceMqtt() {
 
     if (!connected) {
         if (probeWithoutWill) {
-            gWillFailures = 0;  // plain CONNECT failed too: not the will's fault
+            gWillFailures = 0;
         } else if (useWill) {
             ++gWillFailures;
         }
@@ -305,25 +297,90 @@ bool serviceMqtt() {
     }
     gWillFailures = 0;
 
-    // Announce ourselves. Retained, and the only publish this feed ever gets
-    // from the device - there is no periodic heartbeat on it.
-    if (gMqtt.publish(AIO_FEED_DEVICE_STATUS, kStatusOnline, true)) {
-        ++gPublishCount;
-    }
-
-    gMqtt.subscribe(AIO_FEED_BUZZER_COMMAND);
     gMqtt.subscribe(AIO_TOPIC_THROTTLE);
     gMqtt.subscribe(AIO_TOPIC_ERRORS);
+    gMqtt.subscribe(AIO_FEED_BUZZER_COMMAND);
+
+    const bool announced = gMqtt.publish(AIO_FEED_DEVICE_STATUS, kStatusOnline, true);
+    if (announced) {
+        ++gPublishCount;
+    }
     if (kPrintBanner) {
-        Serial.printf("# mqtt connected (LWT %s), %s = %s\n",
+        Serial.printf("# mqtt connected (LWT %s), %s = %s%s\n",
                       useWill ? "registered" : "not registered", AIO_FEED_DEVICE_STATUS,
-                      kStatusOnline);
-        Serial.println("# subscribed to buzzer-command / throttle / errors");
+                      kStatusOnline, announced ? "" : " (publish FAILED)");
+        Serial.println("# subscribed to throttle / errors / buzzer-command");
     }
 
-    // Anything that happened while we were offline goes out now.
     flushEvents();
     return true;
+}
+
+bool publishValue(const char *topic, const char *format, float value) {
+    if (!gMqtt.connected()) {
+        return false;
+    }
+    char payload[16];
+    snprintf(payload, sizeof(payload), format, value);
+    if (!gMqtt.publish(topic, payload)) {
+        return false;
+    }
+    ++gPublishCount;
+    return true;
+}
+
+void printStatusLine() {
+    const float stdMag = gWindow.stddev();
+    const bool moving = stdMag > kMotionStdThresholdG;
+
+    Serial.printf("# window n=%lu |a|mean=%.3f |a|max=%.3f |a|std=%.3f -> %s | "
+                  "det=%s peak=%.2fg (need %.2fg) impacts=%lu rejected=%lu falls=%lu",
+                  static_cast<unsigned long>(gWindow.count), gWindow.mean, gWindow.max, stdMag,
+                  moving ? "MOVING" : "static",
+                  ThresholdDetector::Detector::stateName(gDetector.state()), gPeakAccelG,
+                  gDetector.config().impactG, static_cast<unsigned long>(gImpactCount),
+                  static_cast<unsigned long>(gRejectCount),
+                  static_cast<unsigned long>(gFallCount));
+    gPeakAccelG = 0.0f;
+
+    if (Barometer::ready()) {
+        const BaroMath::AltitudeTracker &t = Barometer::tracker();
+        if (baroAltitudeValid()) {
+            Serial.printf(" | baro p=%.2fhPa h=%+.2fm dh=%+.2fm (peak %+.2f) vz=%+.2fm/s",
+                          Barometer::pressureHpa(), t.altitudeM(), t.altitudeDiffM(),
+                          gStatusAltDiffPeakM, t.verticalSpeedMps());
+        } else {
+            Serial.printf(" | baro p=%.2fhPa calibrating", Barometer::pressureHpa());
+        }
+        gStatusAltDiffPeakM = 0.0f;
+    }
+    Serial.println();
+}
+
+void publishBarometerSlot() {
+    const std::uint8_t feed = gBaroFeedIndex;
+    gBaroFeedIndex = static_cast<std::uint8_t>((gBaroFeedIndex + 1) % 3);
+
+    switch (feed) {
+        case 0:
+            if (Barometer::tracker().sampleCount() > 0) {
+                publishValue(AIO_FEED_PRESSURE, "%.2f", Barometer::pressureHpa());
+            }
+            break;
+        case 1:
+            if (baroAltitudeValid()) {
+                publishValue(AIO_FEED_ALTITUDE, "%.2f", Barometer::tracker().altitudeM());
+            }
+            break;
+        default:
+
+            if (gAltDiffPeakValid &&
+                publishValue(AIO_FEED_ALTITUDE_DIFF, "%.2f", gAltDiffPeakM)) {
+                gAltDiffPeakM = 0.0f;
+                gAltDiffPeakValid = false;
+            }
+            break;
+    }
 }
 
 void publishWindow() {
@@ -331,40 +388,21 @@ void publishWindow() {
         return;
     }
 
-    const float meanMag = gWindow.mean;
-    const float stdMag = gWindow.stddev();
-    const bool moving = stdMag > kMotionStdThresholdG;
-
     if (kPrintBanner) {
-        // |a|max vs the impact threshold is the first thing to check when nothing
-        // is being detected: if peak never approaches impactG, stage 2 never fires.
-        Serial.printf("# window n=%lu |a|mean=%.3f |a|max=%.3f |a|std=%.3f -> %s | "
-                      "det=%s peak=%.2fg (need %.2fg) impacts=%lu rejected=%lu falls=%lu\n",
-                      static_cast<unsigned long>(gWindow.count), meanMag, gWindow.max, stdMag,
-                      moving ? "MOVING" : "static",
-                      ThresholdDetector::Detector::stateName(gDetector.state()), gPeakAccelG,
-                      gDetector.config().impactG, static_cast<unsigned long>(gImpactCount),
-                      static_cast<unsigned long>(gRejectCount),
-                      static_cast<unsigned long>(gFallCount));
-        gPeakAccelG = 0.0f;
+        printStatusLine();
     }
-
-    if (gMqtt.connected()) {
-        // accel-mag is the only periodic feed; fall-detected is edge-triggered
-        // from the detector. See the rate budget in adafruit_io_config.h.
-        char payload[16];
-        snprintf(payload, sizeof(payload), "%.4f", meanMag);
-        if (gMqtt.publish(AIO_FEED_ACCEL_MAG, payload)) {
-            ++gPublishCount;
-        }
-    }
-
     gWindow.reset();
-}
 
-// ---------------------------------------------------------------------------
-// Rule-based fall detection
-// ---------------------------------------------------------------------------
+    const bool accelSlot = !baroTelemetryActive() || (gPublishSlot % 2 == 0);
+    ++gPublishSlot;
+
+    if (accelSlot) {
+        publishValue(AIO_FEED_ACCEL_MAG, "%.4f", gAccelMagWindow.mean);
+        gAccelMagWindow.reset();
+    } else {
+        publishBarometerSlot();
+    }
+}
 
 void publishFallDetected(int value) {
     if (!gMqtt.connected()) {
@@ -375,34 +413,27 @@ void publishFallDetected(int value) {
     }
 }
 
-/// Apply the selected sensitivity preset to the detector.
 void applySensitivityPreset(int preset) {
     auto &cfg = gDetector.config();
     switch (preset) {
-        case 1:  // sensitive
+        case 1:
             cfg.impactG = 2.6f;
             cfg.stillStdG = 0.50f;
             break;
-        case 2:  // strict
+        case 2:
             cfg.impactG = 3.0f;
             cfg.stillStdG = 0.32f;
             break;
-        case 3:  // bench testing - deliberately trigger-happy
+        case 3:
             cfg.impactG = 1.8f;
             cfg.stillStdG = 0.60f;
             cfg.orientationChangeDeg = 15.0f;
             break;
-        default:  // 0 = header defaults, leave as-is
+        default:
             break;
     }
 }
 
-/// Push a synthetic fall through a scratch detector to prove the cascade and the
-/// configured thresholds work, independently of whatever the hardware is doing.
-///
-/// Rest at 1 g -> a hard impact spike -> rest in a tilted orientation. If this
-/// fails, the thresholds are unreachable. If it passes but real movement never
-/// triggers, the problem is the test motion, not the code.
 void runDetectorSelfTest() {
     ThresholdDetector::Detector probe(gDetector.config());
     bool fired = false;
@@ -418,9 +449,9 @@ void runDetectorSelfTest() {
         }
     };
 
-    feed(0.0f, 0.0f, 1.0f, 0.0f, 2000);   // upright and still
-    feed(0.0f, 0.0f, 4.5f, 200.0f, 60);   // impact, 4.5 g with angular rate
-    feed(0.95f, 0.0f, 0.1f, 0.0f, 2600);  // still again, tipped ~85 degrees
+    feed(0.0f, 0.0f, 1.0f, 0.0f, 2000);
+    feed(0.0f, 0.0f, 4.5f, 200.0f, 60);
+    feed(0.95f, 0.0f, 0.1f, 0.0f, 2600);
 
     Serial.printf("# detector self-test: %s (synthetic fall, tilt=%.0fdeg std=%.3fg)\n",
                   fired ? "PASS" : "FAIL", probe.lastOrientationChangeDeg(),
@@ -430,7 +461,6 @@ void runDetectorSelfTest() {
     }
 }
 
-/// Feed one sample to the detector and act on whatever it decides.
 void runFallDetection(const SensorHub::Sample9 &sample) {
     const std::uint32_t started = micros();
     const ThresholdDetector::Event event =
@@ -463,14 +493,12 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
 
         case ThresholdDetector::Event::FallConfirmed: {
             ++gFallCount;
-            // Shared default pattern (single 0.5 s burst), identical to the alert
-            // [env:ml_inference] raises - see AlarmManager::Pattern.
+
             AlarmManager::trigger();
+            logDeviceRow("fall");
             gFallDetectedPublished = true;
             publishFallDetected(1);
 
-            // Stage 3 passed, so lastOrientationChangeDeg() is the tilt that
-            // cleared orientationChangeDeg. Queued, sent once, between samples.
             reportFallTilt(gDetector.lastOrientationChangeDeg());
             logIncident("FALL DETECTED");
             gIncidentOpen = true;
@@ -488,11 +516,50 @@ void runFallDetection(const SensorHub::Sample9 &sample) {
     }
 }
 
-}  // namespace
+void raiseHostFall(const char *details) {
+    ++gFallCount;
+    AlarmManager::trigger();
+    logDeviceRow("fall_dl");
+    gFallDetectedPublished = true;
+    publishFallDetected(1);
+    logIncident("FALL DETECTED (DL)");
+    gIncidentOpen = true;
+    Serial.printf("*** FALL DETECTED (deep learning, host) #%lu %s ***\n",
+                  static_cast<unsigned long>(gFallCount), details);
+}
+
+void pollHostCommands() {
+    static char line[48];
+    static std::size_t len = 0;
+    while (Serial.available() > 0) {
+        const char c = static_cast<char>(Serial.read());
+        if (c != '\n' && c != '\r') {
+            if (len + 1 < sizeof(line)) {
+                line[len++] = c;
+            }
+            continue;
+        }
+        line[len] = '\0';
+        if (kDlStream && std::strncmp(line, "FALL", 4) == 0) {
+            raiseHostFall(line + 4);
+        } else if (std::strcmp(line, "HEADER") == 0) {
+            Serial.println(kCsvHeader);
+        } else if (std::strcmp(line, "DBDUMP") == 0) {
+            DeviceLog::dump(Serial);
+        } else if (std::strcmp(line, "DBINFO") == 0) {
+            DeviceLog::info(Serial);
+        } else if (std::strcmp(line, "DBCLEAR") == 0) {
+            DeviceLog::clear();
+            Serial.println("#DBCLEAR-DONE");
+        }
+        len = 0;
+    }
+}
+
+}
 
 void setup() {
-    // Drive the actuators off before anything else: an undriven GPIO floats, and
-    // a floating input on an active-low module reads as "on".
+
     AlarmManager::forceOff();
 
     Serial.begin(115200);
@@ -519,6 +586,18 @@ void setup() {
         Serial.printf("# magnetometer: %s\n", SensorHub::magKindName(status.magKind));
     }
 
+    const Barometer::Status baro = Barometer::begin(Serial);
+    if (kPrintBanner) {
+        if (baro.ready) {
+            Serial.println("# barometer: altitude reference = mean pressure of the first 2 s, "
+                           "keep still; GPIO3 (no open incident) re-zeroes");
+        } else {
+            Serial.println("# barometer: none - Pressure/Altitude columns stay empty");
+        }
+    }
+
+    DeviceLog::begin(&Serial);
+
     if (kEnableFallDetection) {
         gDetector.reset();
         applySensitivityPreset(kSensitivityPreset);
@@ -544,7 +623,7 @@ void setup() {
     }
 
     if (gCloudActive) {
-        // PSK vs WPA2-Enterprise is decided by include/secrets.h.
+
         WifiLink::beginFromSecrets(kPrintBanner ? &Serial : nullptr);
         if (kPrintBanner) {
             Serial.printf("# wifi mode: %s\n", WifiLink::modeName());
@@ -554,8 +633,16 @@ void setup() {
         gMqtt.setKeepAlive(kMqttKeepAliveSec);
         gMqtt.setBufferSize(256);
         if (kPrintBanner) {
-            Serial.printf("# publishing %s every %lu ms\n", AIO_FEED_ACCEL_MAG,
-                          static_cast<unsigned long>(kPublishIntervalMs));
+            if (baroTelemetryActive()) {
+                Serial.printf("# publishing %s every %lu ms\n", AIO_FEED_ACCEL_MAG,
+                              static_cast<unsigned long>(2 * kPublishIntervalMs));
+                Serial.printf("# publishing %s / %s / %s in turn, each every %lu ms\n",
+                              AIO_FEED_PRESSURE, AIO_FEED_ALTITUDE, AIO_FEED_ALTITUDE_DIFF,
+                              static_cast<unsigned long>(6 * kPublishIntervalMs));
+            } else {
+                Serial.printf("# publishing %s every %lu ms\n", AIO_FEED_ACCEL_MAG,
+                              static_cast<unsigned long>(kPublishIntervalMs));
+            }
             Serial.printf("# publishing %s on detection (1) and on clear (0)\n",
                           AIO_FEED_FALL_DETECTED);
             Serial.printf("# publishing %s once per fall (tilt, deg)\n", AIO_FEED_FALL_TILT);
@@ -566,17 +653,26 @@ void setup() {
         }
     }
 
-    Serial.println("Timestamp_ms,Ax,Ay,Az,Gx,Gy,Gz,Mx,My,Mz");
+    if (kDlStream) {
+        Serial.println("# fall detection: deep learning model on the host ONLY "
+                       "(python deep_learning/infer_stream.py --port ...)");
+        Serial.println("#   rule-based detector disabled; no host = no fall detection");
+    }
+    if (kStreamCsv) {
+        Serial.println(kCsvHeader);
+    } else if (kPrintBanner) {
+        Serial.println("# CSV rows off (kStreamCsv = false in raw_stream_main.cpp)");
+    }
     gNextSampleMs = millis();
     gLastPublishMs = millis();
 }
 
 void loop() {
     AlarmManager::update();
+    pollHostCommands();
 
     if (AlarmManager::consumeDismissPress()) {
-        // update() already silenced the actuators. Push the switch back to off so
-        // the dashboard stops showing an active buzzer command.
+
         if (kPrintBanner) {
             Serial.println("# button GPIO3: actuators silenced");
         }
@@ -588,17 +684,19 @@ void loop() {
             gFallDetectedPublished = false;
         }
 
-        // The debounced GPIO3 press is consumed here rather than in the ISR or
-        // inside AlarmManager: MQTT is not safe from interrupt context, and the
-        // alarm module is shared by all environments and stays network-free.
-        // Only a press that closes an open incident is a dismissal.
         if (gIncidentOpen) {
             logIncident("DISMISSED BY USER");
+            logDeviceRow("dismiss");
             gIncidentOpen = false;
+        } else if (Barometer::ready()) {
+
+            Barometer::rezero();
+            if (kPrintBanner) {
+                Serial.println("# barometer: re-zeroing altitude, keep still for 2 s");
+            }
         }
     }
 
-    // Clear the dashboard indicator once the alert pattern has finished.
     if (gFallDetectedPublished && !AlarmManager::isAlerting()) {
         publishFallDetected(0);
         gFallDetectedPublished = false;
@@ -608,9 +706,7 @@ void loop() {
     const bool sampleDue = static_cast<std::int32_t>(now - gNextSampleMs) >= 0;
 
     if (sampleDue) {
-        // Fixed-cadence scheduling: advance by the period so jitter does not
-        // accumulate. If we fell far behind (a host that stopped draining the
-        // CDC endpoint), resync instead of firing a burst of catch-up samples.
+
         if (now - gNextSampleMs > 5 * kSamplePeriodMs) {
             gNextSampleMs = now + kSamplePeriodMs;
         } else {
@@ -626,6 +722,8 @@ void loop() {
             const float az = sample.v[SensorHub::kAz];
             const float accelMag = std::sqrt(ax * ax + ay * ay + az * az);
             gWindow.add(accelMag);
+            gAccelMagWindow.add(accelMag);
+            gLogWindow.add(accelMag);
             if (accelMag > gPeakAccelG) {
                 gPeakAccelG = accelMag;
             }
@@ -637,18 +735,50 @@ void loop() {
                 runFallDetection(sample);
             }
 
-            // Serial.printf("%lu,%.5f,%.5f,%.5f,%.4f,%.4f,%.4f,%.3f,%.3f,%.3f\n",
-            //               static_cast<unsigned long>(sample.timestampMs), ax, ay, az,
-            //               sample.v[SensorHub::kGx], sample.v[SensorHub::kGy],
-            //               sample.v[SensorHub::kGz], sample.v[SensorHub::kMx],
-            //               sample.v[SensorHub::kMy], sample.v[SensorHub::kMz]);
+            if (kStreamCsv) {
+
+                char baro[48] = ",,,";
+                if (Barometer::ready() && Barometer::tracker().sampleCount() > 0) {
+                    if (baroAltitudeValid()) {
+                        const BaroMath::AltitudeTracker &t = Barometer::tracker();
+                        snprintf(baro, sizeof(baro), ",%.3f,%.3f,%.3f", Barometer::pressureHpa(),
+                                 t.altitudeM(), t.altitudeDiffM());
+                    } else {
+                        snprintf(baro, sizeof(baro), ",%.3f,,", Barometer::pressureHpa());
+                    }
+                }
+                Serial.printf("%lu,%.5f,%.5f,%.5f,%.4f,%.4f,%.4f,%.3f,%.3f,%.3f%s\n",
+                              static_cast<unsigned long>(sample.timestampMs), ax, ay, az,
+                              sample.v[SensorHub::kGx], sample.v[SensorHub::kGy],
+                              sample.v[SensorHub::kGz], sample.v[SensorHub::kMx],
+                              sample.v[SensorHub::kMy], sample.v[SensorHub::kMz], baro);
+            }
         } else {
             ++gMissedReads;
         }
-        return;  // one unit of work per iteration; network waits for the gap
+        return;
+    }
+
+    if (Barometer::service()) {
+        onBaroSample();
+    }
+
+    if (DeviceLog::ready() && now - gLastLogMs >= kDeviceLogIntervalMs) {
+        gLastLogMs = now;
+        logDeviceRow("window");
+        gLogWindow.reset();
     }
 
     if (!gCloudActive) {
+
+        if (kPrintBanner && now - gLastPublishMs >= kPublishIntervalMs) {
+            gLastPublishMs = now;
+            if (gWindow.count > 0) {
+                printStatusLine();
+                gWindow.reset();
+            }
+            gAccelMagWindow.reset();
+        }
         return;
     }
 
@@ -663,8 +793,6 @@ void loop() {
 
     const bool justConnected = WifiLink::consumeJustConnected();
 
-    // Start SNTP once, after the first association: it needs a live network
-    // stack, and it runs in the background so it never blocks the loop.
     if (justConnected && !gTimeSyncStarted) {
         configTzTime(kTimezonePosix, kNtpServer1, kNtpServer2);
         gTimeSyncStarted = true;

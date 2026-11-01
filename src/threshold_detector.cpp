@@ -7,14 +7,10 @@ namespace {
 
 constexpr float kRadToDeg = 57.2957795131f;
 
-// Time constant of the gravity-direction reference. Long enough to ignore normal
-// arm motion, short enough to follow a genuine posture change within a second or
-// two of ordinary activity.
 constexpr float kReferenceTauMs = 1500.0f;
 
 inline float magnitude3(float x, float y, float z) { return std::sqrt(x * x + y * y + z * z); }
 
-/// Angle between two vectors, in degrees. Returns 0 if either is degenerate.
 float angleBetweenDeg(float ax, float ay, float az, float bx, float by, float bz) {
     const float na = magnitude3(ax, ay, az);
     const float nb = magnitude3(bx, by, bz);
@@ -27,7 +23,7 @@ float angleBetweenDeg(float ax, float ay, float az, float bx, float by, float bz
     return std::acos(cosine) * kRadToDeg;
 }
 
-}  // namespace
+}
 
 const char *Detector::stateName(State state) {
     switch (state) {
@@ -87,7 +83,7 @@ void Detector::beginAssessment(std::uint32_t timestampMs) {
 }
 
 Event Detector::finishAssessment() {
-    // Population standard deviation of |a| across the assessment window.
+
     lastStillStdG_ =
         stillCount_ > 1 ? std::sqrt(stillM2_ / static_cast<float>(stillCount_)) : 0.0f;
 
@@ -105,9 +101,6 @@ Event Detector::finishAssessment() {
         return Event::Rejected;
     }
 
-    // A fall reorients the body, spins it on the way down, or both. Requiring the
-    // orientation change alone is stricter; the default accepts either, because
-    // some wrist falls end with the arm back near its original attitude.
     const bool posture = config_.requireOrientationChange ? tilted : (tilted || spun);
     if (!posture) {
         lastRejection_ = Rejection::NoOrientationChange;
@@ -138,9 +131,7 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
             return Event::None;
 
         case State::Idle: {
-            // Track the gravity direction with a first-order filter, but only
-            // while idle: once a candidate starts, this must stay frozen at the
-            // pre-impact posture for the comparison to mean anything.
+
             if (!refValid_) {
                 refX_ = ax;
                 refY_ = ay;
@@ -156,7 +147,7 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
 
             if (accelMag >= config_.impactG) {
                 if (config_.requireFreeFall) {
-                    return Event::None;  // impact without the preceding low-g dip
+                    return Event::None;
                 }
                 impactMs_ = timestampMs;
                 lastImpactG_ = accelMag;
@@ -191,8 +182,7 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
         }
 
         case State::Settling: {
-            // Still inside the chaotic period right after the impact: all we do
-            // is track the peak angular rate.
+
             if (gyroMag > lastGyroPeakDps_) {
                 lastGyroPeakDps_ = gyroMag;
             }
@@ -214,8 +204,6 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
                 lastGyroPeakDps_ = gyroMag;
             }
 
-            // Welford accumulation of |a|, plus the mean accel vector for the
-            // post-impact orientation.
             ++stillCount_;
             const float delta = accelMag - stillMean_;
             stillMean_ += delta / static_cast<float>(stillCount_);
@@ -228,7 +216,7 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
                 return finishAssessment();
             }
             if (timestampMs - impactMs_ >= config_.impactTimeoutMs) {
-                // Ran out of time but we have samples; judge on what we have.
+
                 return finishAssessment();
             }
             return Event::None;
@@ -238,4 +226,4 @@ Event Detector::update(std::uint32_t timestampMs, float ax, float ay, float az, 
     return Event::None;
 }
 
-}  // namespace ThresholdDetector
+}

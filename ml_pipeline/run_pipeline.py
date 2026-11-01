@@ -1,12 +1,3 @@
-"""End-to-end runner: processed CSVs -> windowed features -> LOSO benchmark.
-
-    python ml_pipeline/run_pipeline.py                      # extract + evaluate
-    python ml_pipeline/run_pipeline.py --reuse-features      # skip extraction
-    python ml_pipeline/run_pipeline.py --window-seconds 2.5 --overlap 0.5
-    python ml_pipeline/run_pipeline.py --models random_forest svm_rbf
-    python ml_pipeline/run_pipeline.py --fall-label-mode impact
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -24,7 +15,7 @@ try:
         window_config_from_args,
     )
     from .train_evaluate import evaluate
-except ImportError:  # pragma: no cover - direct script execution
+except ImportError:
     import config
     from feature_extraction import (
         add_window_arguments,
@@ -34,7 +25,6 @@ except ImportError:  # pragma: no cover - direct script execution
         window_config_from_args,
     )
     from train_evaluate import evaluate
-
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -67,7 +57,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n-jobs", type=int, default=-1)
     add_window_arguments(parser)
     return parser.parse_args(argv)
-
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
@@ -105,7 +94,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\nTotal pipeline time: {time.perf_counter() - started:.1f}s")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

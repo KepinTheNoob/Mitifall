@@ -8,7 +8,22 @@ ml_pipeline/__pycache__/
 ml_pipeline/features.csv
 ml_pipeline/outputs/features.csv
 
-# Cloud credentials: WiFi password, Adafruit IO key, Blynk auth token.
+# deep_learning: window tensor cache (12 MB, rebuilt from dataset/ on demand)
+# and per-fold benchmark checkpoints (predictions.csv holds the same rows)
+deep_learning/__pycache__/
+deep_learning/outputs/windows_cache.npz
+deep_learning/outputs/benchmark/*/folds/
+
+# Cloud credentials: WiFi password, Adafruit IO key.
 include/secrets.h
 dataset/processed/
 dataset/raw/
+
+# storage: the live database and its WAL files change every few seconds while
+# logger_service.py runs; commit a CSV from export_csv.py instead.
+storage/__pycache__/
+storage/telemetry.db
+storage/telemetry.db-wal
+storage/telemetry.db-shm
+storage/*.unwritten.jsonl
+storage/exports/*.part

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Dashboard MQTT untuk gelang pendeteksi jatuh Mitifall (env raw_stream, Adafruit IO).">
+<title>Mitifall Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor"/><path d="M8 12.5l2.7 2.7L16.5 9.5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5L2.8 19.5h18.4z" fill="currentColor"/><path d="M12 9.5v4.5M12 16.8v.01" stroke="#1b1300" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-crit" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.2 16h15.6L18 12.6V9a6 6 0 0 0-6-6z" fill="currentColor"/><path d="M9.5 18.5a2.6 2.6 0 0 0 5 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-move" viewBox="0 0 24 24"><path d="M3 12h3l2.5-6 4 12 3-9 1.8 3H21" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-still" viewBox="0 0 24 24"><path d="M3 12h18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+  <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.2 16h15.6L18 12.6V9a6 6 0 0 0-6-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9.5 18.5a2.6 2.6 0 0 0 5 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-demo" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 21h8M10 9.5l4 2-4 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="currentColor"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="9" width="26" height="14" rx="7" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M7 16h4l2-4 3 8 2.5-6 1.5 2H25" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div><strong>Mitifall</strong></div>
+    </div>
+    <button class="btn small" id="btnDisconnect" type="button" hidden>Disconnect</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="banners" id="banners"></div>
+
+  <section class="connect" id="connectView" aria-labelledby="connectTitle">
+    <form class="panel" id="connectForm" novalidate>
+      <h1 id="connectTitle">Connect to Adafruit IO</h1>
+      <div class="fields">
+        <div class="field">
+          <label for="fUser">Username Adafruit IO</label>
+          <input type="text" id="fUser" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="mis. hopi_mitifall" required>
+        </div>
+        <div class="field">
+          <label for="fKey">AIO Key</label>
+          <div class="keyrow">
+            <input type="password" id="fKey" name="aio-key" autocomplete="current-password" autocapitalize="off" spellcheck="false" placeholder="aio_xxxxxxxxxxxxxxxxxxxx" required>
+            <button type="button" class="btn" id="btnShowKey" aria-pressed="false">Show</button>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="fRemember"> Remember me</label>
+        <div class="form-error" id="formError" role="alert" hidden><svg aria-hidden="true"><use href="#i-warn"/></svg><span></span></div>
+        <div class="actions">
+          <button type="submit" class="btn primary" id="btnConnect"><svg aria-hidden="true"><use href="#i-plug"/></svg>Connect</button>
+          <button type="button" class="btn" id="btnDemo"><svg aria-hidden="true"><use href="#i-demo"/></svg>Try demo mode</button>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <main class="dash" id="dashView" hidden>
+    <section class="kpis" aria-label="Ringkasan gelang">
+      <div class="kpi">
+        <div class="kpi-label">Percepatan rata-rata |a|</div>
+        <div class="hero" id="kMag">—</div>
+        <div class="kpi-sub" id="kMagSub">Menunggu data dari gelang</div>
+      </div>
+      <div class="kpi kpi-alarm" id="kAlarmBox" data-active="false">
+        <div class="kpi-label">Alarm gelang</div>
+        <div class="state" id="kAlarm" data-s="idle" aria-live="polite"><svg aria-hidden="true"><use href="#i-bell-off"/></svg><span>Siaga</span></div>
+        <div class="kpi-sub" id="kAlarmSub">Belum ada perintah</div>
+        <div class="actions">
+          <button class="btn primary" type="button" id="btnAlarmOn"><svg aria-hidden="true"><use href="#i-crit"/></svg>Bunyikan alarm</button>
+          <button class="btn" type="button" id="btnAlarmOff">Matikan</button>
+        </div>
+        <div class="note" id="kAlarmNote"></div>
+        <button class="linkish" type="button" id="btnDemoPress" hidden>Simulasikan tombol di gelang</button>
+      </div>
+      <div class="kpi kpi-baro">
+        <div class="kpi-label">Ketinggian &amp; Tekanan</div>
+        <div class="hero" id="kAlt">—</div>
+        <div class="kpi-sub" id="kAltSub">Tekanan: —</div>
+        <div class="note" id="kAltNote">Menunggu data BMP280 (dikirim tiap 15 dtk)…</div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="chartTitle">
+      <div class="card-head">
+        <div>
+          <h2 id="chartTitle">|a| per jendela 2,5 detik</h2>
+          <p class="meta" id="chartMeta">Rata-rata besar percepatan yang dikirim gelang. Garis 1 g = gelang diam.</p>
+        </div>
+        <div class="tools">
+          <div class="seg" role="radiogroup" aria-label="Rentang waktu" id="rangeSeg">
+            <button type="button" role="radio" aria-checked="true" data-min="5">5 mnt</button>
+            <button type="button" role="radio" aria-checked="false" data-min="15">15 mnt</button>
+            <button type="button" role="radio" aria-checked="false" data-min="60">60 mnt</button>
+          </div>
+          <button class="btn small" type="button" id="btnTable" aria-pressed="false">Table</button>
+        </div>
+      </div>
+      <div class="legend" aria-hidden="true">
+        <span><i class="key-line"></i>|a| rata-rata</span>
+        <span><i class="key-alarm"></i>Alarm dinyalakan</span>
+      </div>
+      <div class="chart" id="chart" tabindex="0" role="img" aria-label="Grafik percepatan. Gunakan panah kiri dan kanan untuk membaca tiap titik.">
+        <svg id="chartSvg" aria-hidden="true"></svg>
+        <div class="empty" id="chartEmpty">Belum ada data di rentang ini. Setelah gelang tersambung, satu titik masuk tiap 2,5 detik.</div>
+        <div class="tip" id="tip" hidden><div class="v"></div><div class="t"></div><div class="x"></div></div>
+      </div>
+      <div class="table-wrap" id="tableWrap" hidden>
+        <table>
+          <thead><tr><th>Waktu</th><th class="num">|a| (g)</th></tr></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="card" aria-labelledby="logTitle">
+        <div class="card-head">
+          <div><h2 id="logTitle">Event log</h2></div>
+          <button class="btn small" type="button" id="btnClearLog">Clear</button>
+        </div>
+        <ol class="log" id="log"></ol>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.0/dist/mqtt.min.js"></script>
+<script src="app.js?v=8"></script>
+</body>
+</html>

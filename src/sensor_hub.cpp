@@ -15,20 +15,17 @@ Adafruit_MPU6050 gMpu;
 Adafruit_HMC5883_Unified gHmc(12345);
 Status gStatus;
 
-// --------------------------------------------------------------------------
-// Shared little-endian burst read helper for the QST parts
-// --------------------------------------------------------------------------
 bool readAxes6(std::uint8_t address, std::uint8_t firstDataReg, std::int16_t &x,
                std::int16_t &y, std::int16_t &z) {
     Wire.beginTransmission(address);
     Wire.write(firstDataReg);
-    if (Wire.endTransmission(false) != 0) {  // repeated start
+    if (Wire.endTransmission(false) != 0) {
         return false;
     }
     if (Wire.requestFrom(static_cast<int>(address), 6) != 6) {
         return false;
     }
-    // Both parts are little-endian: LSB then MSB, signed 16-bit per axis.
+
     const int xl = Wire.read(), xh = Wire.read();
     const int yl = Wire.read(), yh = Wire.read();
     const int zl = Wire.read(), zh = Wire.read();
@@ -45,27 +42,22 @@ bool writeRegister(std::uint8_t address, std::uint8_t reg, std::uint8_t value) {
     return Wire.endTransmission() == 0;
 }
 
-// --------------------------------------------------------------------------
-// QMC5883L driver, 0x0D (the Adafruit HMC5883 library cannot drive it)
-// --------------------------------------------------------------------------
 namespace qmc5883l {
 
-constexpr std::uint8_t kRegData = 0x00;  // X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB
+constexpr std::uint8_t kRegData = 0x00;
 constexpr std::uint8_t kRegControl1 = 0x09;
 constexpr std::uint8_t kRegControl2 = 0x0A;
 constexpr std::uint8_t kRegSetReset = 0x0B;
 
-// MODE = continuous (0x01), ODR = 100 Hz (0x08), RNG = 8 G (0x10), OSR = 512.
 constexpr std::uint8_t kControl1Value = 0x01 | 0x08 | 0x10;
 
-// 8 G range gives 3000 LSB/Gauss; 1 Gauss = 100 uT -> uT = raw / 30.
 constexpr float kLsbToMicroTesla = 1.0f / 30.0f;
 
 bool begin() {
     if (!I2cDiagnostics::probeAddress(Wire, kQmc5883lAddr)) {
         return false;
     }
-    // Soft reset, then the recommended SET/RESET period, then continuous mode.
+
     writeRegister(kQmc5883lAddr, kRegControl2, 0x80);
     delay(10);
     if (!writeRegister(kQmc5883lAddr, kRegSetReset, 0x01)) {
@@ -85,34 +77,22 @@ bool read(float &mx, float &my, float &mz) {
     return true;
 }
 
-}  // namespace qmc5883l
+}
 
-// --------------------------------------------------------------------------
-// QMC5883P driver, 0x2C - the part currently shipping on GY-271/GY-270 boards
-// --------------------------------------------------------------------------
-// Not register compatible with either the HMC5883L or the QMC5883L: the chip ID
-// moves to 0x00, the data block starts at 0x01, and the control registers and
-// sensitivity table are different again. Register map per the QMC5883P datasheet
-// (cross-checked against Adafruit's QMC5883P driver).
 namespace qmc5883p {
 
-constexpr std::uint8_t kRegChipId = 0x00;    ///< reads 0x80
-constexpr std::uint8_t kRegData = 0x01;      ///< X_LSB .. Z_MSB (0x01..0x06)
-constexpr std::uint8_t kRegStatus = 0x09;    ///< bit0 DRDY, bit1 overflow
-constexpr std::uint8_t kRegControl1 = 0x0A;  ///< mode[1:0] ODR[3:2] OSR[5:4] DSR[7:6]
-constexpr std::uint8_t kRegControl2 = 0x0B;  ///< setreset[1:0] range[3:2] .. rst[7]
+constexpr std::uint8_t kRegChipId = 0x00;
+constexpr std::uint8_t kRegData = 0x01;
+constexpr std::uint8_t kRegStatus = 0x09;
+constexpr std::uint8_t kRegControl1 = 0x0A;
+constexpr std::uint8_t kRegControl2 = 0x0B;
 
 constexpr std::uint8_t kChipId = 0x80;
 
-// CONTROL1: mode = continuous (0x03), ODR = 100 Hz (0x02 << 2), OSR = 8, DSR = 1.
-// 100 Hz keeps the magnetometer ahead of the 50 Hz acquisition loop so reads
-// never return the same sample twice.
 constexpr std::uint8_t kControl1Value = 0x03 | (0x02 << 2);
 
-// CONTROL2: set/reset on (0x00), range = 8 G (0x02 << 2).
 constexpr std::uint8_t kControl2Value = (0x02 << 2);
 
-// 8 G range gives 3750 LSB/Gauss; 1 Gauss = 100 uT -> uT = raw / 37.5.
 constexpr float kLsbToMicroTesla = 1.0f / 37.5f;
 
 bool begin() {
@@ -125,8 +105,6 @@ bool begin() {
         return false;
     }
 
-    // Soft reset (CONTROL2 bit 7) clears the control registers, so range and mode
-    // must be written afterwards, in that order.
     writeRegister(kQmc5883pAddr, kRegControl2, 0x80);
     delay(50);
 
@@ -147,7 +125,7 @@ bool read(float &mx, float &my, float &mz) {
     return true;
 }
 
-}  // namespace qmc5883p
+}
 
 float clampf(float value, float limit) {
     if (value > limit) return limit;
@@ -157,9 +135,7 @@ float clampf(float value, float limit) {
 
 bool startBus(int sda, int scl) {
     Wire.end();
-    // setPins() before begin() matters: the Adafruit drivers call the no-argument
-    // Wire.begin() internally, which would otherwise fall back to the variant
-    // default pins and silently undo a custom wiring.
+
     Wire.setPins(sda, scl);
     if (!Wire.begin(sda, scl, kI2cFrequencyHz)) {
         return false;
@@ -179,9 +155,7 @@ bool beginImu(Stream &log) {
         if (!gMpu.begin(address, &Wire)) {
             continue;
         }
-        // Ranges chosen to reproduce the training capture's saturation limits
-        // (+/-8 g, +/-250 deg/s) and a 21 Hz DLPF, below the 25 Hz Nyquist
-        // limit of the 50 Hz acquisition loop.
+
         gMpu.setAccelerometerRange(MPU6050_RANGE_8_G);
         gMpu.setGyroRange(MPU6050_RANGE_250_DEG);
         gMpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
@@ -226,7 +200,7 @@ bool beginMag(Stream &log) {
     return false;
 }
 
-}  // namespace
+}
 
 const char *magKindName(MagKind kind) {
     switch (kind) {
@@ -319,4 +293,4 @@ bool read(Sample9 &sample) {
     return true;
 }
 
-}  // namespace SensorHub
+}
