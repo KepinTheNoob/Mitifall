@@ -16,8 +16,6 @@ deep_learning/outputs/benchmark/*/folds/
 
 # Cloud credentials: WiFi password, Adafruit IO key.
 include/secrets.h
-dataset/processed/
-dataset/raw/
 
 # storage: the live database and its WAL files change every few seconds while
 # logger_service.py runs; commit a CSV from export_csv.py instead.
