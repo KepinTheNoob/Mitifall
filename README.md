@@ -28,12 +28,12 @@ Pins and actuator polarity are set in `include/board_config.h`.
 |-------------|--------------|-------|
 | `scanner` | I²C scan, sensor check, actuator test | — |
 | `raw_stream` | Threshold-based fall detection on the bracelet, telemetry | Adafruit IO (MQTT) |
-| `dl_stream` | Streams CSV over USB; falls are detected **only** by the deep learning model on the host | Adafruit IO (MQTT) |
-| `ml_inference` | Random Forest running on the bracelet, offline | — |
+| `dl_stream` / `dl_inference` | Streams CSV over USB; falls are detected **only** by the deep learning model on the host | Adafruit IO (MQTT) |
+| `ml_inference` | Random Forest running on the bracelet, telemetry | Adafruit IO (MQTT) |
 
 ```bash
 cp include/secrets.example.h include/secrets.h   # WiFi + Adafruit IO credentials
-pio run -e raw_stream -t upload -t monitor
+pio run -e ml_inference -t upload -t monitor    # or -e raw_stream / dl_stream
 ```
 
 The ESP32-C3 only connects to **2.4 GHz** WiFi.
@@ -49,13 +49,15 @@ pip install -r requirements.txt -r deep_learning/requirements.txt -r storage/req
 ## Machine learning (Random Forest)
 
 Trained on the UMAFall wrist recordings (19 subjects), 2 s windows, 53 features,
-validated with Leave-One-Subject-Out.
+validated with Leave-One-Subject-Out. Runs on-device Random Forest inference,
+connects to 2.4 GHz WiFi, and reports telemetry to the Adafruit IO dashboard
+(with automatic offline fallback if credentials are unset).
 
 ```bash
 python dataset/process_dataset.py
 python ml_pipeline/run_pipeline.py      # features + LOSO benchmark
 python ml_pipeline/export_model.py      # -> include/RandomForest.h
-pio run -e ml_inference -t upload
+pio run -e ml_inference -t upload -t monitor
 ```
 
 ## Deep learning (CNN-BiLSTM)
@@ -88,7 +90,7 @@ Full report: `deep_learning/outputs/evaluation/report.md`.
 
 ## Telemetry logging
 
-The bracelet (`raw_stream`, `dl_stream`) keeps its own SQLite log on internal
+The bracelet (`raw_stream`, `dl_stream`, `ml_inference`) keeps its own SQLite log on internal
 flash (LittleFS, ~1.9 MB): one row every 2.5 s with the timestamp, mean |a|,
 pressure, altitude and alarm state, plus a row on every fall and dismissal.
 It works without WiFi; the oldest rows are removed when the storage is nearly

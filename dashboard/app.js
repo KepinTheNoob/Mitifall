@@ -100,6 +100,7 @@ const S = {
   pendingOwn: [],
   syncUntil: {},
   baro: { pressure: null, altitude: null },
+  baroLog: [],
   baroSeen: false,
   lastMagAt: 0, lastMsgAt: 0, received: 0,
   deviceState: 'off',
@@ -112,7 +113,7 @@ function resetData() {
     points: [], motion: [], motionNow: null, alarmMarks: [],
     alarm: { active: false, until: 0, last: null },
     quota: [], pendingOwn: [], syncUntil: {},
-    baro: { pressure: null, altitude: null }, baroSeen: false,
+    baro: { pressure: null, altitude: null }, baroLog: [], baroSeen: false,
     lastMagAt: 0, lastMsgAt: 0, received: 0, deviceState: 'wait',
     connectedAt: 0, historyLoaded: false, cooldownUntil: 0, url: '',
   });
@@ -173,6 +174,8 @@ function applyBaro(field, v, t, opts = {}) {
   const cur = S.baro[field];
   if (opts.history && cur && (cur.live || cur.t >= t)) return true;
   S.baro[field] = { v, t, live: !opts.history };
+  S.baroLog.push({ field, v, t });
+  if (S.baroLog.length > 5000) S.baroLog.shift();
   if (!opts.history) S.baroSeen = true;
   return true;
 }
@@ -702,6 +705,7 @@ const UI = (() => {
     chart: $('#chart'), svg: $('#chartSvg'), chartEmpty: $('#chartEmpty'), tip: $('#tip'),
     tableWrap: $('#tableWrap'), tableBody: $('#tableBody'),
     log: $('#log'), btnClearLog: $('#btnClearLog'), infoList: $('#infoList'), btnCsv: $('#btnCsv'),
+    sensorBody: $('#sensorBody'), sensorCount: $('#sensorCount'),
   };
 
   let raf = 0;
@@ -784,6 +788,7 @@ const UI = (() => {
     if (!el.tableWrap.hidden) renderTable(now);
     if (renderedLog !== S.logVersion) renderLog();
     if (el.infoList) renderInfo(now);
+    renderSensorLog();
   }
 
   function setPill(node, state, text) {
@@ -957,7 +962,6 @@ const UI = (() => {
     if (1 > ymin && 1 < ymax) {
       const y = r1(Y(1));
       s += `<line class="c-ref" x1="${m.l}" x2="${m.l + pw}" y1="${y}" y2="${y}"/>`;
-      s += `<text class="ref-label" x="${m.l + 6}" y="${y - 6}">1 g · diam</text>`;
     }
     const base = m.t + ph;
     s += `<line class="c-axis" x1="${m.l}" x2="${m.l + pw}" y1="${base}" y2="${base}"/>`;
@@ -1160,19 +1164,69 @@ const UI = (() => {
     }));
   }
 
+  function sensorRows() {
+    const src = S.points.map((p) => ({ t: p.t, kind: 'accel', v: p.v }))
+      .concat(S.baroLog.map((b) => ({ t: b.t, kind: b.field, v: b.v })))
+      .sort((a, b) => a.t - b.t);
+    const marks = S.alarmMarks.slice().sort((a, b) => a.t - b.t);
+    const cur = { accel: null, pressure: null, altitude: null };
+    let mi = 0;
+    let alarmUntil = 0;
+    return src.map((r) => {
+      while (mi < marks.length && marks[mi].t <= r.t) {
+        alarmUntil = marks[mi].kind === 'on' ? marks[mi].t + S.cfg.alarmS * 1000 : 0;
+        mi++;
+      }
+      cur[r.kind] = r.v;
+      return { t: r.t, source: r.kind, accel: cur.accel, pressure: cur.pressure,
+        altitude: cur.altitude, alarm: r.t < alarmUntil ? 1 : 0 };
+    });
+  }
+
+  let renderedSensorKey = '';
+  function renderSensorLog() {
+    const rows = sensorRows();
+    const key = `${rows.length}|${rows.length ? rows[rows.length - 1].t : 0}`;
+    if (key === renderedSensorKey) return;
+    renderedSensorKey = key;
+    el.sensorCount.textContent = `${rows.length} baris`;
+    if (!rows.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.textContent = 'Belum ada data sensor.';
+      tr.appendChild(td);
+      el.sensorBody.replaceChildren(tr);
+      return;
+    }
+    const f = (v, d) => (v === null ? '—' : fmtNum(v, d));
+    el.sensorBody.replaceChildren(...rows.slice(-200).reverse().map((r) => {
+      const tr = document.createElement('tr');
+      for (const [txt, cls] of [[fmtTime(r.t), ''], [f(r.accel, 3), 'num'], [f(r.pressure, 2), 'num'],
+        [r.altitude === null ? '—' : fmtSigned(r.altitude, 2), 'num'], [r.alarm ? 'Berbunyi' : 'Siaga', '']]) {
+        const td = document.createElement('td');
+        td.textContent = txt;
+        if (cls) td.className = cls;
+        tr.appendChild(td);
+      }
+      return tr;
+    }));
+  }
+
   function downloadCsv() {
-    const lines = ['waktu_iso,waktu_lokal,accel_mag_g,gerak'];
-    for (const p of S.points) {
-      const mv = motionAt(p.t);
-      const d = new Date(p.t);
-      const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${fmtTime(p.t)}`;
-      lines.push(`${d.toISOString()},${local},${p.v.toFixed(4)},${mv === null ? '' : mv ? 1 : 0}`);
+    const lines = ['timestamp_utc,timestamp_local,accel_mag,pressure,altitude,alarm_state,source'];
+    const n = (v, d) => (v === null ? '' : v.toFixed(d));
+    for (const r of sensorRows()) {
+      const d = new Date(r.t);
+      const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${fmtTime(r.t)}`;
+      lines.push([d.toISOString(), local, n(r.accel, 4), n(r.pressure, 2), n(r.altitude, 2),
+        r.alarm, r.source].join(','));
     }
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
     const a = document.createElement('a');
     const d = new Date();
     a.href = URL.createObjectURL(blob);
-    a.download = `mitifall-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.csv`;
+    a.download = `mitifall-sensor-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();

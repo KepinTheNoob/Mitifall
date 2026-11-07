@@ -38,7 +38,9 @@ def read_dump(port: serial.Serial, timeout_s: float) -> tuple[dict, list[list[st
             deadline = time.monotonic() + timeout_s
         elif line.startswith("#DBDUMP-END") and header is not None:
             return header, rows
-    raise SystemExit("no complete dump from the bracelet (is it running raw_stream or dl_stream?)")
+    raise SystemExit(
+        "no complete dump from the bracelet (is it running raw_stream, dl_stream, or ml_inference?)"
+    )
 
 
 def num(cell: str):

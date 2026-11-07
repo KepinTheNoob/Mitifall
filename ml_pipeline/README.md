@@ -134,7 +134,7 @@ Firmware build environments (see `platformio.ini`):
 |---|---|---|
 | `scanner` | `src/scanner_main.cpp` | I2C scan, sensor ID, pin sweep, actuator test |
 | `raw_stream` | `src/raw_stream_main.cpp` | 50 Hz 9-DoF CSV capture |
-| `ml_inference` | `src/inference_main.cpp` | On-device inference and alarm |
+| `ml_inference` | `src/inference_main.cpp` | On-device inference, WiFi & Adafruit IO dashboard telemetry |
 
 ```bash
 pio run -e ml_inference -t upload

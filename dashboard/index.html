@@ -92,7 +92,7 @@
       <div class="card-head">
         <div>
           <h2 id="chartTitle">|a| per jendela 2,5 detik</h2>
-          <p class="meta" id="chartMeta">Rata-rata besar percepatan yang dikirim gelang. Garis 1 g = gelang diam.</p>
+          <p class="meta" id="chartMeta">Rata-rata besar percepatan yang dikirim gelang.</p>
         </div>
         <div class="tools">
           <div class="seg" role="radiogroup" aria-label="Rentang waktu" id="rangeSeg">
@@ -120,7 +120,7 @@
       </div>
     </section>
 
-    <section>
+    <section class="grid-2">
       <div class="card" aria-labelledby="logTitle">
         <div class="card-head">
           <div><h2 id="logTitle">Event log</h2></div>
@@ -128,10 +128,22 @@
         </div>
         <ol class="log" id="log"></ol>
       </div>
+      <div class="card" aria-labelledby="sensorTitle">
+        <div class="card-head">
+          <div><h2 id="sensorTitle">Sensor log</h2><p class="meta" id="sensorCount">0 baris</p></div>
+          <button class="btn small" type="button" id="btnCsv"><svg aria-hidden="true"><use href="#i-download"/></svg>Export CSV</button>
+        </div>
+        <div class="table-wrap sensor-wrap">
+          <table>
+            <thead><tr><th>Waktu</th><th class="num">|a| (g)</th><th class="num">Tekanan (hPa)</th><th class="num">Ketinggian (m)</th><th>Alarm</th></tr></thead>
+            <tbody id="sensorBody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
   </main>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.0/dist/mqtt.min.js"></script>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

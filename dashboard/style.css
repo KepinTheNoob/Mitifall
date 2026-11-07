@@ -226,7 +226,8 @@ td { padding: 7px 12px; border-top: 1px solid var(--line); font-variant-numeric:
 td.num, th.num { text-align: right; }
 
 .grid-2 { display: grid; gap: 16px; }
-@media (min-width: 980px) { .grid-2 { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); } }
+@media (min-width: 980px) { .grid-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.sensor-wrap { max-height: 360px; }
 .log { list-style: none; margin: 12px 0 0; padding: 0; max-height: 360px; overflow: auto; }
 .log li { display: grid; grid-template-columns: 18px 64px 1fr; gap: 10px; align-items: start; padding: 8px 2px; border-top: 1px solid var(--line); font-size: 14px; }
 .log li:first-child { border-top: 0; }
